@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "MD-01",
+      "source": "# Заголовок\n\n_курсив_ и **жирный**, ~~зачёркнутый~~.\n\n> Цитата\n\n- [ ] Задача\n  - Вложенный пункт\n\n| A | B |\n| :--- | ---: |\n| 1 | 2 |\n\n[Ссылка][Ref]\n\n![alt](./doc.assets/image.png)\n\n```js\nconst n = 1;\n```\n\n[Ref]: https://example.test/ \"Title\"\n",
+      "action": { "kind": "switch-modes", "cycles": 3 },
+      "changeScope": null,
+      "expected": "# Заголовок\n\n_курсив_ и **жирный**, ~~зачёркнутый~~.\n\n> Цитата\n\n- [ ] Задача\n  - Вложенный пункт\n\n| A | B |\n| :--- | ---: |\n| 1 | 2 |\n\n[Ссылка][Ref]\n\n![alt](./doc.assets/image.png)\n\n```js\nconst n = 1;\n```\n\n[Ref]: https://example.test/ \"Title\"\n"
+    },
+    {
+      "id": "MD-02",
+      "source": "_Пролог_  \n\nСделать слово важным.\n\n* Конец\n",
+      "action": { "kind": "set-inline", "mark": "strong", "enabled": true, "select": "слово" },
+      "changeScope": "слово",
+      "expected": "_Пролог_  \n\nСделать **слово** важным.\n\n* Конец\n"
+    },
+    {
+      "id": "MD-03",
+      "source": "* Родитель\n  - [ ] Вложенная задача\n  - [x] Готовая задача\n\nХвост.\n",
+      "action": { "kind": "set-task", "checked": true, "select": "Вложенная задача" },
+      "changeScope": "[ ]",
+      "expected": "* Родитель\n  - [x] Вложенная задача\n  - [x] Готовая задача\n\nХвост.\n"
+    },
+    {
+      "id": "MD-04",
+      "source": "До таблицы.\n\n| Имя   | Значение |\n| :----- | -------: |\n| альфа |  12      |\n\nПосле таблицы.\n",
+      "action": { "kind": "replace-text", "select": "альфа", "insert": "бета" },
+      "changeScope": "альфа",
+      "expected": "До таблицы.\n\n| Имя   | Значение |\n| :----- | -------: |\n| бета |  12      |\n\nПосле таблицы.\n"
+    },
+    {
+      "id": "MD-05",
+      "source": "<custom-widget data-x=\"1\">сырой текст</custom-widget>\n\nОбычный абзац.\n",
+      "action": { "kind": "replace-text", "select": "Обычный", "insert": "Новый" },
+      "changeScope": "Обычный",
+      "expected": "<custom-widget data-x=\"1\">сырой текст</custom-widget>\n\nНовый абзац.\n"
+    },
+    {
+      "id": "MD-06",
+      "source": "До.\r\n\r\n````js\r\nreturn 1;\r\n````\r\n\r\nПосле.\r\n",
+      "action": { "kind": "replace-text", "select": "return 1;", "insert": "return 2;" },
+      "changeScope": "return 1;",
+      "expected": "До.\r\n\r\n````js\r\nreturn 2;\r\n````\r\n\r\nПосле.\r\n"
+    },
+    {
+      "id": "MD-07",
+      "source": ":::note\nНеизвестное расширение.\n:::\n\nСоседний текст.\n",
+      "action": { "kind": "set-inline", "mark": "emphasis", "enabled": true, "select": "Соседний" },
+      "changeScope": "Соседний",
+      "expected": ":::note\nНеизвестное расширение.\n:::\n\n*Соседний* текст.\n"
+    },
+    {
+      "id": "MD-08",
+      "source": "См. [Подробности][Ref].\n\n[Ref]: <https://example.test/path>  \"Описание\"\n",
+      "action": { "kind": "replace-text", "select": "Подробности", "insert": "Инструкцию" },
+      "changeScope": "Подробности",
+      "expected": "См. [Инструкцию][Ref].\n\n[Ref]: <https://example.test/path>  \"Описание\"\n"
+    },
+    {
+      "id": "MD-09",
+      "source": "A😀Б e\u0301\r\n",
+      "action": { "kind": "set-inline", "mark": "strong", "enabled": true, "select": "😀" },
+      "changeScope": "😀",
+      "expected": "A**😀**Б e\u0301\r\n"
+    },
+    {
+      "id": "MD-10",
+      "source": "7) Первый\n9) Второй\n\nХвост без перевода строки",
+      "action": { "kind": "replace-text", "select": "Второй", "insert": "Изменённый" },
+      "changeScope": "Второй",
+      "expected": "7) Первый\n9) Изменённый\n\nХвост без перевода строки"
+    },
+    {
+      "id": "MD-11",
+      "source": "![старый alt](./заметки.assets/фото.png \"Заголовок\")\n\nТекст.\n",
+      "action": { "kind": "replace-image-alt", "select": "старый alt", "insert": "новый alt" },
+      "changeScope": "старый alt",
+      "expected": "![новый alt](./заметки.assets/фото.png \"Заголовок\")\n\nТекст.\n"
+    },
+    {
+      "id": "MD-12",
+      "source": "### Название ###  \n\n* Следующий пункт\n",
+      "action": { "kind": "set-heading", "level": 2, "select": "Название" },
+      "changeScope": "### Название ###  ",
+      "expected": "## Название ##  \n\n* Следующий пункт\n"
+    }
+  ]
+}

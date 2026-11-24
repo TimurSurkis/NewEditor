@@ -22,13 +22,13 @@
 
 Пользователь выбрал TypeScript, актуальный стабильный Electron и SQLite. Остальные технические решения делегированы исполнителю. Для первой версии принят следующий набор.
 
-Версии сверены 2026-11-21 с `latest` в npm и официальным индексом Node.js. Это исходная точка для установки; совместимость в dev- и упакованном приложении проверяется в P1 [плана реализации](../trackers/plan-desktop-v1.md).
+Версии повторно сверены 2026-11-24 с npm. Для установки P1 используется совместимый набор ниже; фактические результаты запуска и упаковки фиксируются в [трекере](../trackers/plan-desktop-v1.md). Детали каркаса — в [спецификации P1](spec-desktop-bootstrap.md).
 
 | Компонент | Выбор / проверенная версия | Назначение и источник |
 | --- | --- | --- |
-| Язык | TypeScript 7.0.2, `strict` | [npm](https://registry.npmjs.org/typescript/latest) |
+| Язык | TypeScript 6.0.3, `strict` | Последняя 6.0; TypeScript 7.0.2 пока вне peer-диапазона typescript-eslint 8.74.0 |
 | Десктоп | Electron 45.4.1 stable | [npm](https://registry.npmjs.org/electron/latest) |
-| Среда разработки | Node.js 26.13.1 LTS, npm 11.20.0 | [Официальный индекс](https://nodejs.org/dist/index.json) |
+| Среда разработки | Node.js 24.11.1, npm 11.6.2 | Установленная среда; удовлетворяет engines инструментов. Фиксируется в `.nvmrc`; глобальное обновление не требуется |
 | Сборка Electron | electron-vite 6.0.0 | [npm](https://registry.npmjs.org/electron-vite/latest) |
 | Сборка UI | Vite 8.3.8, `@vitejs/plugin-react` 6.3.0 | [Vite](https://registry.npmjs.org/vite/latest), [плагин React](https://registry.npmjs.org/@vitejs%2fplugin-react/latest) |
 | Интерфейс | React и React DOM 19.3.1 | [React](https://registry.npmjs.org/react/latest), [React DOM](https://registry.npmjs.org/react-dom/latest) |
@@ -36,6 +36,7 @@
 | SQLite | `better-sqlite3` 13.2.0 | [npm](https://registry.npmjs.org/better-sqlite3/latest) |
 | Проверка чистой логики | Vitest 5.1.1 | [npm](https://registry.npmjs.org/vitest/latest) |
 | UI и сквозные сценарии | Playwright, `@playwright/test` 1.65.1 | [npm](https://registry.npmjs.org/@playwright%2ftest/latest) |
+| Стиль и статический анализ | ESLint 10.15.0, typescript-eslint 8.74.0, Prettier 3.10.1 | Совместимость peer-зависимостей проверяется при установке |
 
 Node.js в таблице используется для инструментов разработки; runtime Node.js десктопного приложения поставляется вместе с Electron. Нативный SQLite-модуль пересобирается под Electron ABI и проверяется в main-процессе, включая упакованное приложение.
 

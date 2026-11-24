@@ -1,0 +1,46 @@
+:global(*) {
+  box-sizing: border-box;
+}
+:global(body) {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  color: #202630;
+  background: #f6f7f9;
+}
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.header {
+  padding: 18px 24px;
+  border-bottom: 1px solid #dfe3e9;
+  font-size: 18px;
+  font-weight: 650;
+  background: #fff;
+}
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+}
+.empty h1 {
+  font-size: 24px;
+  font-weight: 550;
+  margin: 0 0 12px;
+}
+.empty p {
+  max-width: 500px;
+  color: #596474;
+  line-height: 1.6;
+}
+.status {
+  padding: 10px 24px;
+  border-top: 1px solid #dfe3e9;
+  font-size: 13px;
+  color: #596474;
+}

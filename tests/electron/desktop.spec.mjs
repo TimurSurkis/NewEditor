@@ -50,6 +50,8 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
     });
     const runtime = await app.evaluate(({ BrowserWindow, app }) => {
       const prefs = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
+      const fs = process.getBuiltinModule('fs'),
+        path = process.getBuiltinModule('path');
       return {
         sandbox: prefs.sandbox,
         isolated: prefs.contextIsolation,
@@ -58,6 +60,15 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
         packaged: app.isPackaged,
         electron: process.versions.electron,
         abi: process.versions.modules,
+        privateModes:
+          process.platform === 'win32'
+            ? null
+            : [
+                app.getPath('userData'),
+                ...['service.sqlite', 'service.sqlite-wal', 'service.sqlite-shm'].map((name) =>
+                  path.join(app.getPath('userData'), name),
+                ),
+              ].map((file) => fs.statSync(file).mode & 0o777),
         appPath: app.getAppPath(),
         nativeTestsPresent: process
           .getBuiltinModule('fs')
@@ -78,6 +89,7 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
       packaged: Boolean(process.env['NEWEDITOR_EXECUTABLE']),
     });
     console.log(runtime);
+    if (runtime.privateModes) expect(runtime.privateModes).toEqual([0o700, 0o600, 0o600, 0o600]);
     if (runtime.packaged) expect(runtime.nativeTestsPresent).toBe(false);
     expect(
       runtime.nativeModules.some((path) =>

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { protectDatabaseFiles } from './service-files.ts';
 
 export const schemaVersion = 2;
 
@@ -90,6 +91,7 @@ export interface ServiceDatabase {
 }
 
 export function openServiceDatabase(filePath: string): ServiceDatabase {
+  protectDatabaseFiles(filePath, true);
   const db = new Database(filePath);
   try {
     const current = db.pragma('user_version', { simple: true });
@@ -118,6 +120,7 @@ export function openServiceDatabase(filePath: string): ServiceDatabase {
       })();
     }
     validateMigrations(db, schemaVersion);
+    protectDatabaseFiles(filePath, false);
     // Проверяем наличие всех столбцов до выдачи соединения сервисам.
     db.prepare(
       'SELECT resource_id, canonical_path, document_id, format, representation_json, content_hash, last_revision, next_version, created_at FROM local_resources LIMIT 0',

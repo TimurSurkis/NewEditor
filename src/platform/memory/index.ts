@@ -105,7 +105,12 @@ export function createMemoryStorage() {
           outcome = { kind: 'conflict', actualRevision: current?.storageRevision ?? null };
         else {
           const changed = !current || !equalSnapshots(current.snapshot, request.snapshot);
-          const revision = changed ? next() : current.storageRevision;
+          const revision =
+            changed ||
+            current.documentId !== request.documentId ||
+            current.format !== request.format
+              ? next()
+              : current.storageRevision;
           let versionId: string | null = null;
           if (changed) {
             versionId = `version-${next()}`;

@@ -8,12 +8,13 @@ import type { DesktopIpcMap } from '../shared/contracts';
 import { openServiceDatabase } from './database';
 import type { ServiceDatabase } from './database';
 import { rendererUrl, validateDiagnosticRequest } from './security';
+import { prepareServiceProfile } from './service-files';
 
 app.setName('NewEditor');
 const profile = process.env['NEWEDITOR_USER_DATA'];
 if (profile) {
   if (!isAbsolute(profile)) throw new Error('NEWEDITOR_USER_DATA должен быть абсолютным путём');
-  mkdirSync(profile, { recursive: true });
+  mkdirSync(profile, { recursive: true, mode: 0o700 });
   app.setPath('userData', profile);
 }
 
@@ -122,7 +123,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       try {
-        mkdirSync(app.getPath('userData'), { recursive: true });
+        prepareServiceProfile(app.getPath('userData'));
         database = openServiceDatabase(join(app.getPath('userData'), 'service.sqlite'));
       } catch {
         databaseError = {

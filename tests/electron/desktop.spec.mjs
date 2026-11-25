@@ -42,7 +42,7 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
         health: await window.desktop.getStorageHealth(),
       })),
     ).toEqual({
-      methods: ['getAppInfo', 'getStorageHealth'],
+      methods: ['getAppInfo', 'getStorageHealth', 'loadDocument', 'pickOpen', 'removeDraft'],
       node: 'undefined',
       process: 'undefined',
       info: { ok: true, value: { appVersion: '0.1.0' } },

@@ -1,0 +1,75 @@
+.workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 24px;
+}
+.workspace-toolbar button,
+.workspace-errors button {
+  padding: 6px 12px;
+}
+.workspace-tabs {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid #dfe3e9;
+  background: #e9edf3;
+}
+.workspace-tab {
+  display: flex;
+  flex: 0 0 auto;
+  border-right: 1px solid #ccd3df;
+}
+.workspace-tab button {
+  border: 0;
+  padding: 10px 12px;
+  background: transparent;
+  color: inherit;
+}
+.workspace-tab button[aria-selected='true'] {
+  background: #fff;
+  box-shadow: inset 0 3px #325bb2;
+}
+.workspace-tab button:focus-visible {
+  outline: 2px solid #325bb2;
+  outline-offset: -2px;
+}
+.workspace-panel {
+  flex: 1;
+  min-width: 0;
+  background: #fff;
+}
+.workspace-panel pre {
+  min-height: 240px;
+  margin: 0;
+  padding: 20px 24px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  font: 14px/1.6 monospace;
+}
+.workspace-metadata {
+  padding: 8px 24px;
+  font-size: 13px;
+  color: #596474;
+  border-bottom: 1px solid #e9edf3;
+}
+.workspace-empty {
+  flex: 1;
+  padding: 48px 24px;
+  text-align: center;
+}
+.workspace-errors {
+  margin: 0 24px 12px;
+  padding: 12px;
+  background: #fff0ed;
+  color: #812a1c;
+}
+.workspace-errors ul {
+  margin-top: 0;
+}

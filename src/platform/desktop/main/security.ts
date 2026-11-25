@@ -28,11 +28,22 @@ export function validateDiagnosticRequest(
   expectedUrl: string,
   args: readonly unknown[],
 ): PortError | null {
-  if (!senderIsTrusted || !frameIsMain || frameUrl !== expectedUrl) {
-    return { code: 'permission-denied', message: 'Источник запроса не разрешён', retryable: false };
-  }
+  const source = validateRequestSource(senderIsTrusted, frameIsMain, frameUrl, expectedUrl);
+  if (source) return source;
   if (args.length !== 1 || args[0] !== null) {
     return { code: 'invalid-input', message: 'Ожидается пустой запрос', retryable: false };
+  }
+  return null;
+}
+
+export function validateRequestSource(
+  senderIsTrusted: boolean,
+  frameIsMain: boolean,
+  frameUrl: string | undefined,
+  expectedUrl: string,
+): PortError | null {
+  if (!senderIsTrusted || !frameIsMain || frameUrl !== expectedUrl) {
+    return { code: 'permission-denied', message: 'Источник запроса не разрешён', retryable: false };
   }
   return null;
 }

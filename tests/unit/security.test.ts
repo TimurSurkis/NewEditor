@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { rendererUrl, validateDiagnosticRequest } from '../../src/platform/desktop/main/security';
+import {
+  rendererUrl,
+  validateDiagnosticRequest,
+  validateRequestSource,
+} from '../../src/platform/desktop/main/security';
 
 describe('IPC и источник renderer', () => {
   const url = 'http://127.0.0.1:5173/';
@@ -32,5 +36,9 @@ describe('IPC и источник renderer', () => {
     expect(() => rendererUrl('http://user@localhost', false, '/app/index.html')).toThrow();
     expect(rendererUrl('https://example.org', true, htmlPath)).toBe(pathToFileURL(htmlPath).href);
     expect(rendererUrl(undefined, false, resolve('app/документ с пробелом.html'))).toContain('%20');
+  });
+  it('общая файловая граница не принимает subframe даже с доверенным URL и WebContents', () => {
+    expect(validateRequestSource(true, false, url, url)?.code).toBe('permission-denied');
+    expect(validateRequestSource(true, true, url, url)).toBeNull();
   });
 });

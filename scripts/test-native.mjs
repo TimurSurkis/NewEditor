@@ -21,6 +21,7 @@ await build({
         'storage-contract.test': 'tests/native/storage-contract.test.ts',
         'service-files.test': 'tests/native/service-files.test.ts',
         'application-local.test': 'tests/native/application-local.test.ts',
+        'file-ipc.test': 'tests/native/file-ipc.test.ts',
         'save-crash-worker': 'tests/native/save-crash-worker.ts',
       },
       output: { entryFileNames: '[name].mjs' },
@@ -40,6 +41,7 @@ const result = spawnSync(
     'out/native-tests/storage-contract.test.mjs',
     'out/native-tests/service-files.test.mjs',
     'out/native-tests/application-local.test.mjs',
+    'out/native-tests/file-ipc.test.mjs',
   ],
   {
     stdio: 'inherit',

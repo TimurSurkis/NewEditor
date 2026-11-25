@@ -218,8 +218,12 @@ export interface DocumentApplication {
   close(sessionId: SessionId, decision: 'cancel' | 'discard' | 'save', target?: SaveTarget): Promise<Result<{ readonly closed: boolean }, PortError>>;
 }
 
+export interface OpenDialogResult {
+  readonly documents: readonly { readonly ref: StorageRef; readonly displayName: string }[];
+  readonly errors: readonly { readonly displayName: string; readonly error: PortError }[];
+}
 export interface DesktopDialogs {
-  pickOpen(): Promise<Result<readonly StorageRef[] | null, PortError>>;
+  pickOpen(): Promise<Result<OpenDialogResult | null, PortError>>;
   pickSave(input: {
     readonly suggestedName: string;
     readonly format: DocumentFormat;
@@ -310,6 +314,8 @@ export interface DesktopEventMap {
 ## 5. IPC и валидация
 
 P1 реализует `app:info` и `storage:health` для запуска и проверки нативной SQLite. Остальные обработчики вводятся вместе с модулями P4–P7. Диагностические операции возвращают сведения приложения/схемы, а не принимают произвольный SQL.
+
+P5.1 подключает `dialog:open`, `document:load` и `draft:remove` по [спецификации UI](spec-desktop-ui.md). Диалог возвращает непрозрачные ref/имена и отдельные ошибки пачки; полные пути не передаются. Остальные файловые каналы таблицы пока не экспортированы. Renderer-адаптер для них возвращает явный unsupported, не имитирует успешную запись. Main отзывает клиента при закрытии/новой загрузке renderer и дожидается начатых запросов перед закрытием SQLite.
 
 Preload предоставляет фиксированные методы, соответствующие таблице каналов; renderer не получает универсальный `send(channel, payload)`. Каждый аргумент проходит runtime-проверку в main: строки ID, целые ревизии, структура снимка и разрешённые ссылки на ресурсы. TypeScript не заменяет проверку входных данных.
 

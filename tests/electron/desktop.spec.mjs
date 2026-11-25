@@ -59,6 +59,11 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
         electron: process.versions.electron,
         abi: process.versions.modules,
         appPath: app.getAppPath(),
+        nativeTestsPresent: process
+          .getBuiltinModule('fs')
+          .existsSync(
+            process.getBuiltinModule('path').join(app.getAppPath(), 'out', 'native-tests'),
+          ),
         nativeModules: Object.keys(
           process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`)
             .cache,
@@ -73,6 +78,7 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
       packaged: Boolean(process.env['NEWEDITOR_EXECUTABLE']),
     });
     console.log(runtime);
+    if (runtime.packaged) expect(runtime.nativeTestsPresent).toBe(false);
     expect(
       runtime.nativeModules.some((path) =>
         path.startsWith(`${join(runtime.appPath, 'node_modules', 'better-sqlite3')}${sep}`),

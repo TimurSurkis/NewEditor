@@ -83,6 +83,8 @@ function validateMigrations(db: Database.Database, through: number): void {
 }
 
 export interface ServiceDatabase {
+  // Только main-репозитории. Соединение никогда не передаётся через preload/IPC.
+  readonly connection: Database.Database;
   health(): { readonly schemaVersion: number };
   close(): void;
 }
@@ -148,6 +150,7 @@ export function openServiceDatabase(filePath: string): ServiceDatabase {
       return { schemaVersion };
     });
     return {
+      connection: db,
       health: () => probe(),
       close: () => {
         if (db.open) db.close();

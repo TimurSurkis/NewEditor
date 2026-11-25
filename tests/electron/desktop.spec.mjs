@@ -84,7 +84,9 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
     expect(csp).toContain("default-src 'none'");
     if (process.env['NEWEDITOR_TEST_DEV'] !== '1') {
       expect(csp).toContain("connect-src 'none'");
-      expect(csp).not.toContain('unsafe-inline');
+      expect(csp.split(';').find((rule) => rule.trim().startsWith('script-src'))).not.toContain(
+        'unsafe-inline',
+      );
     }
     const rogueReply = await app.evaluate(async ({ BrowserWindow }) => {
       const rogue = new BrowserWindow({

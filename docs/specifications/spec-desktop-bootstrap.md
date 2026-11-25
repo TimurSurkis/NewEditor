@@ -78,3 +78,5 @@ NEWEDITOR_EXECUTABLE="$PWD/dist/linux-unpacked/neweditor" npm run test:electron
 | macOS x64 | `npm run dist -- --mac --x64` | DMG | Запуск и SQLite; подпись/нотаризация при поставке |
 
 Команды матрицы — инструкция, не свидетельство выполненной проверки. Фактические результаты находятся в трекере.
+
+С P3 в каркасе доступен отдельный стенд Markdown в памяти. Его тесты входят в общие `test:electron`/`test:dev`. Production CSP разрешает inline-стили для CodeMirror, сохраняя запрет inline-скриптов; это не разрешение исполнять HTML документа.

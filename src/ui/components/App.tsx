@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Result } from '../../core';
 import styles from './App.module.css';
+import type { DocumentApplication } from '../../application';
+import { MarkdownPrototype } from './MarkdownPrototype';
 
 interface Diagnostics {
   getAppInfo(): Promise<Result<{ readonly appVersion: string }, { readonly message: string }>>;
@@ -9,7 +11,14 @@ interface Diagnostics {
   >;
 }
 
-export function App({ diagnostics }: { readonly diagnostics: Diagnostics }) {
+export function App({
+  diagnostics,
+  application,
+}: {
+  readonly diagnostics: Diagnostics;
+  readonly application: DocumentApplication;
+}) {
+  const [prototype, setPrototype] = useState(false);
   const [status, setStatus] = useState('Проверка приложения…');
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -40,10 +49,17 @@ export function App({ diagnostics }: { readonly diagnostics: Diagnostics }) {
   return (
     <div className={styles.shell}>
       <header className={styles.header}>NewEditor</header>
-      <main className={styles.empty}>
-        <h1>Нет открытых документов</h1>
-        <p>Каркас приложения готов. Редактирование TXT и Markdown появится на следующих этапах.</p>
-      </main>
+      {prototype ? (
+        <MarkdownPrototype application={application} />
+      ) : (
+        <main className={styles.empty}>
+          <h1>Нет открытых документов</h1>
+          <p>
+            Каркас приложения готов. Редактирование TXT и Markdown появится на следующих этапах.
+          </p>
+          <button onClick={() => setPrototype(true)}>Прототип Markdown</button>
+        </main>
+      )}
       <footer className={styles.status} role={failed ? 'alert' : 'status'}>
         {status}
       </footer>

@@ -11,6 +11,16 @@ export default tseslint.config(
   },
   {
     files: ['tests/electron/*.mjs'],
-    languageOptions: { globals: { window: 'readonly', location: 'readonly' } },
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        location: 'readonly',
+        document: 'readonly',
+        NodeFilter: 'readonly',
+        Event: 'readonly',
+        requestAnimationFrame: 'readonly',
+        performance: 'readonly',
+      },
+    },
   },
 );

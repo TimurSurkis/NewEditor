@@ -30,7 +30,7 @@ export default defineConfig({
           const policy = [
             "default-src 'none'",
             `script-src 'self'${dev ? " 'unsafe-inline'" : ''}`,
-            `style-src 'self'${dev ? " 'unsafe-inline'" : ''}`,
+            "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data:",
             "font-src 'self'",
             dev ? 'connect-src http://127.0.0.1:5173 ws://127.0.0.1:5173' : "connect-src 'none'",

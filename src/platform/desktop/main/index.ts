@@ -29,6 +29,7 @@ let fileIpc: ReturnType<typeof createFileIpc> | null = null;
 const pending = new Set<Promise<unknown>>();
 let quitting = false,
   drained = false;
+let exitRequested = false;
 const unavailable = () => ({
   ok: false as const,
   error:
@@ -86,8 +87,11 @@ async function createWindow(): Promise<void> {
       : null;
   };
   resetClient();
-  next.webContents.on('did-start-navigation', (details) => {
-    if (details.isMainFrame && !details.isSameDocument && !quitting) resetClient();
+  next.webContents.on('did-navigate', () => {
+    if (!quitting) resetClient();
+  });
+  next.webContents.on('will-prevent-unload', () => {
+    exitRequested = false;
   });
   next.setMenuBarVisibility(false);
   next.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -103,6 +107,7 @@ async function createWindow(): Promise<void> {
     fileIpc = null;
     window = null;
     for (const channel of Object.values(channels)) ipcMain.removeHandler(channel);
+    if (exitRequested) app.quit();
   });
 
   // Обработчики привязаны к конкретному окну и только его главному frame.
@@ -183,6 +188,11 @@ if (!app.requestSingleInstanceLock()) {
     if (drained) return;
     event.preventDefault();
     if (quitting) return;
+    if (window && !window.isDestroyed()) {
+      exitRequested = true;
+      window.close();
+      return;
+    }
     quitting = true;
     fileIpc?.close();
     void (async () => {

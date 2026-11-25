@@ -24,12 +24,17 @@ class SourceEditor implements EditorInstance {
   ) {
     this.frame = initial;
     this.composition = new Composition(host);
+    const initialMap = mapText(initial.state.document.text);
     this.view = new EditorView({
       parent: element,
       state: EditorState.create({
-        doc: mapText(initial.state.document.text).text,
+        doc: initialMap.text,
+        selection: EditorSelection.single(
+          sourceToText(initialMap, initial.selection.anchor),
+          sourceToText(initialMap, initial.selection.head),
+        ),
         extensions: [
-          markdown(),
+          ...(initial.state.document.format === 'markdown' ? [markdown()] : []),
           EditorView.lineWrapping,
           this.readOnlyConfig.of(EditorState.readOnly.of(!initial.editable)),
           EditorView.contentAttributes.of({ 'aria-label': 'Исходный редактор' }),

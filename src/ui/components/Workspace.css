@@ -73,3 +73,37 @@
 .workspace-errors ul {
   margin-top: 0;
 }
+.source-toolbar,
+.source-search {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 16px;
+}
+.source-search label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.source-search textarea {
+  min-height: 30px;
+  width: 180px;
+}
+.source-warning {
+  margin: 4px 16px;
+  font-size: 12px;
+  color: #805622;
+}
+.workspace-source-editor .cm-editor {
+  min-height: 260px;
+}
+.workspace-source-editor .cm-content {
+  padding: 16px;
+  font: 14px/1.6 monospace;
+}
+.source-panel > section[role='alert'] {
+  margin: 8px 16px;
+  padding: 8px;
+  background: #fff0ed;
+}

@@ -1,19 +1,55 @@
 import { useSyncExternalStore } from 'react';
 import type { WorkspaceApplication } from '../../application';
 import './Workspace.css';
+import type { WorkspaceEditor } from '../editors/workspace-editor';
+import { SourcePanel } from './SourcePanel';
 
-export function Workspace({ workspace }: { readonly workspace: WorkspaceApplication }) {
+export function Workspace({
+  workspace,
+  editor,
+}: {
+  readonly workspace: WorkspaceApplication;
+  readonly editor: WorkspaceEditor;
+}) {
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = state.tabs.find((tab) => tab.id === state.activeId);
   return (
-    <main className="workspace" aria-label="Документы">
+    <main
+      className="workspace"
+      aria-label="Документы"
+      onKeyDown={(event) => {
+        if (event.defaultPrevented || !active) return;
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          !event.altKey &&
+          (['f', 'h'].includes(event.key.toLowerCase()) || ['KeyF', 'KeyH'].includes(event.code))
+        ) {
+          event.preventDefault();
+          editor.setSearch(active.id, { searchOpen: true });
+          event.currentTarget
+            .querySelector<HTMLTextAreaElement>('textarea[aria-label="Найти"]')
+            ?.focus();
+        } else if (event.key === 'F3') {
+          event.preventDefault();
+          void editor.find(active.id, event.shiftKey);
+        }
+      }}
+    >
       <div className="workspace-toolbar" aria-label="Команды документов">
-        <button onClick={() => workspace.create('txt')}>Новый TXT</button>
-        <button onClick={() => workspace.create('markdown')}>Новый Markdown</button>
-        <button disabled={state.opening} onClick={() => void workspace.open()}>
+        <button disabled={state.transitioning} onClick={() => void workspace.create('txt')}>
+          Новый TXT
+        </button>
+        <button disabled={state.transitioning} onClick={() => void workspace.create('markdown')}>
+          Новый Markdown
+        </button>
+        <button
+          disabled={state.opening || state.transitioning}
+          onClick={() => void workspace.open()}
+        >
           {state.opening ? 'Открытие…' : 'Открыть…'}
         </button>
       </div>
+      {state.transitioning && <p role="status">Ожидание подтверждения ввода…</p>}
       {state.errors.length > 0 && (
         <section role="alert" className="workspace-errors">
           <ul>
@@ -35,9 +71,9 @@ export function Workspace({ workspace }: { readonly workspace: WorkspaceApplicat
                   aria-selected={tab.id === state.activeId}
                   aria-controls={`panel-${tab.id}`}
                   tabIndex={tab.id === state.activeId ? 0 : -1}
-                  disabled={tab.closing}
+                  disabled={tab.closing || state.transitioning}
                   title={`${tab.name} · ${tab.view.edit.document.location?.resourceId ?? 'Новый документ'}`}
-                  onClick={() => workspace.select(tab.id)}
+                  onClick={() => void workspace.select(tab.id)}
                   onKeyDown={(event) => {
                     const next =
                       event.key === 'ArrowRight'
@@ -52,7 +88,7 @@ export function Workspace({ workspace }: { readonly workspace: WorkspaceApplicat
                     if (next === null) return;
                     event.preventDefault();
                     const target = state.tabs[next]!;
-                    workspace.select(target.id);
+                    void workspace.select(target.id);
                     document.getElementById(`tab-${target.id}`)?.focus();
                   }}
                 >
@@ -61,7 +97,7 @@ export function Workspace({ workspace }: { readonly workspace: WorkspaceApplicat
                 </button>
                 <button
                   aria-label={`Закрыть ${tab.name}`}
-                  disabled={tab.closing}
+                  disabled={tab.closing || state.transitioning}
                   onClick={() => void workspace.close(tab.id)}
                 >
                   ×
@@ -79,12 +115,9 @@ export function Workspace({ workspace }: { readonly workspace: WorkspaceApplicat
               <div className="workspace-metadata">
                 {active.view.edit.document.format === 'txt' ? 'TXT' : 'Markdown'} ·{' '}
                 {active.view.edit.document.fileMetadata.encoding}
-                {active.view.edit.document.fileMetadata.bom ? ' · BOM' : ''} · Только чтение
-                (редактирование — P5.2)
+                {active.view.edit.document.fileMetadata.bom ? ' · BOM' : ''} · Исходный режим
               </div>
-              <pre aria-label="Исходный текст" tabIndex={0}>
-                {active.view.edit.document.text}
-              </pre>
+              <SourcePanel key={active.id} id={active.id} editor={editor} />
             </section>
           )}
         </>

@@ -1,6 +1,6 @@
 import type { DocumentFormat, Result, StorageRef } from '../core';
 import type { PortError } from '../ports';
-import type { DocumentApplication, SessionView } from './contracts';
+import type { CommandError, DocumentApplication, SessionView } from './contracts';
 
 export interface OpenDialogResult {
   readonly documents: readonly { readonly ref: StorageRef; readonly displayName: string }[];
@@ -16,13 +16,14 @@ export interface WorkspaceSnapshot {
   readonly tabs: readonly WorkspaceTab[];
   readonly activeId: string | null;
   readonly opening: boolean;
+  readonly transitioning: boolean;
   readonly errors: readonly string[];
 }
 export interface WorkspaceApplication {
   getSnapshot(): WorkspaceSnapshot;
   subscribe(listener: () => void): () => void;
-  create(format: DocumentFormat): void;
-  select(id: string): void;
+  create(format: DocumentFormat): Promise<void>;
+  select(id: string): Promise<void>;
   open(): Promise<void>;
   close(id: string): Promise<void>;
   clearErrors(): void;
@@ -32,11 +33,13 @@ export interface WorkspaceApplication {
 export function createWorkspaceApplication(
   documents: DocumentApplication,
   pickOpen: () => Promise<Result<OpenDialogResult | null, PortError>>,
+  beforeLeave?: (id: string) => Promise<Result<void, CommandError>>,
 ): WorkspaceApplication {
   let snapshot: WorkspaceSnapshot = Object.freeze({
     tabs: Object.freeze([]),
     activeId: null,
     opening: false,
+    transitioning: false,
     errors: Object.freeze([]),
   });
   const listeners = new Set<() => void>(),
@@ -57,11 +60,30 @@ export function createWorkspaceApplication(
   };
   const issue = (message: string) =>
     publish({ errors: Object.freeze([...snapshot.errors, message]) });
-  const add = (id: string, name: string) => {
+  const leave = async (id: string | null): Promise<boolean> => {
+    if (!live || snapshot.transitioning) return false;
+    if (!beforeLeave || id === null) return true;
+    publish({ transitioning: true });
+    try {
+      const result = await beforeLeave(id);
+      if (!live) return false;
+      if (!result.ok) {
+        issue(result.error.message);
+        return false;
+      }
+      return true;
+    } catch {
+      issue('Не удалось подтвердить ввод редактора');
+      return false;
+    } finally {
+      publish({ transitioning: false });
+    }
+  };
+  const add = (id: string, name: string, activate = true) => {
     if (!live) return;
     const existing = snapshot.tabs.find((tab) => tab.id === id);
     if (existing) {
-      if (!existing.closing) publish({ activeId: id });
+      if (!existing.closing && activate) publish({ activeId: id });
       return;
     }
     const view = documents.getSnapshot(id);
@@ -82,7 +104,7 @@ export function createWorkspaceApplication(
     );
     publish({
       tabs: Object.freeze([...snapshot.tabs, Object.freeze({ id, name, view, closing: false })]),
-      activeId: id,
+      activeId: activate ? id : snapshot.activeId,
     });
   };
   return {
@@ -93,11 +115,14 @@ export function createWorkspaceApplication(
         listeners.delete(listener);
       };
     },
-    create(format) {
+    async create(format) {
+      if (beforeLeave && !(await leave(snapshot.activeId))) return;
       if (live)
         add(documents.create(format), `Без имени ${++serial}.${format === 'txt' ? 'txt' : 'md'}`);
     },
-    select(id) {
+    async select(id) {
+      if (snapshot.activeId === id) return;
+      if (beforeLeave && !(await leave(snapshot.activeId))) return;
       if (
         live &&
         snapshot.activeId !== id &&
@@ -111,6 +136,7 @@ export function createWorkspaceApplication(
       opening = Promise.resolve().then(async () => {
         try {
           if (!live) return;
+          if (beforeLeave && !(await leave(snapshot.activeId))) return;
           const picked = await pickOpen();
           if (!live) return;
           if (!picked.ok) {
@@ -124,8 +150,13 @@ export function createWorkspaceApplication(
             if (!live) return;
             const loaded = await documents.open(choice.ref);
             if (!live) return;
-            if (loaded.ok) add(loaded.value, choice.displayName);
-            else issue(`${choice.displayName}: ${loaded.error.message}`);
+            if (loaded.ok) {
+              const activate =
+                !beforeLeave ||
+                snapshot.activeId === loaded.value ||
+                (await leave(snapshot.activeId));
+              add(loaded.value, choice.displayName, activate);
+            } else issue(`${choice.displayName}: ${loaded.error.message}`);
           }
         } catch {
           issue('Не удалось открыть документы');
@@ -138,6 +169,7 @@ export function createWorkspaceApplication(
       return opening;
     },
     async close(id) {
+      if (beforeLeave && !(await leave(id))) return;
       const tab = snapshot.tabs.find((tab) => tab.id === id);
       if (!live || !tab || tab.closing) return;
       if (tab.view.isDirty) {

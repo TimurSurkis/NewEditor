@@ -180,3 +180,78 @@ it('dispose отписывается от сессии, исключение д�
   );
   expect(workspace.getSnapshot()).toBe(before);
 });
+
+it('переход ожидает guard/IME, повторное намерение не создаёт вкладку', async () => {
+  const { app } = setup(),
+    flush = deferred<Result<void, PortError>>();
+  let block = false;
+  const workspace = createWorkspaceApplication(app, cancelled, () =>
+    block ? flush.promise : Promise.resolve({ ok: true, value: undefined }),
+  );
+  await workspace.create('txt');
+  const first = workspace.getSnapshot().activeId;
+  block = true;
+  const creating = workspace.create('markdown');
+  expect(workspace.getSnapshot().transitioning).toBe(true);
+  await workspace.create('txt');
+  expect(workspace.getSnapshot().activeId).toBe(first);
+  expect(workspace.getSnapshot().tabs).toHaveLength(1);
+  flush.resolve({ ok: true, value: undefined });
+  await creating;
+  expect(workspace.getSnapshot().tabs).toHaveLength(2);
+  expect(workspace.getSnapshot().transitioning).toBe(false);
+  workspace.dispose();
+});
+
+it('поздний open повторно проверяет flush и оставляет новый файл фоновым при отказе', async () => {
+  const { app, seed } = setup(),
+    selected = deferred<Result<OpenDialogResult | null, PortError>>(),
+    entered = deferred<void>();
+  let blocked = false;
+  const workspace = createWorkspaceApplication(
+    app,
+    () => {
+      entered.resolve();
+      return selected.promise;
+    },
+    async () =>
+      blocked
+        ? { ok: false, error: { code: 'busy', message: 'pending input', retryable: false } }
+        : { ok: true, value: undefined },
+  );
+  await workspace.create('txt');
+  const first = workspace.getSnapshot().activeId;
+  const opening = workspace.open();
+  await entered.promise;
+  blocked = true;
+  selected.resolve({
+    ok: true,
+    value: {
+      documents: [{ ref: seed('late', snapshot('A')), displayName: 'late.txt' }],
+      errors: [],
+    },
+  });
+  await opening;
+  expect(workspace.getSnapshot().tabs).toHaveLength(2);
+  expect(workspace.getSnapshot().activeId).toBe(first);
+  expect(workspace.getSnapshot().errors).toContain('pending input');
+  workspace.dispose();
+});
+
+it('отказ flush при закрытии не удаляет чистую вкладку', async () => {
+  const { app } = setup();
+  let blocked = false;
+  const workspace = createWorkspaceApplication(app, cancelled, async () =>
+    blocked
+      ? { ok: false, error: { code: 'busy', message: 'composition', retryable: false } }
+      : { ok: true, value: undefined },
+  );
+  await workspace.create('txt');
+  const id = workspace.getSnapshot().activeId!;
+  blocked = true;
+  await workspace.close(id);
+  expect(workspace.getSnapshot().tabs).toHaveLength(1);
+  expect(app.getSnapshot(id)).toBeDefined();
+  expect(workspace.getSnapshot().errors).toContain('composition');
+  workspace.dispose();
+});

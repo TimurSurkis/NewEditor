@@ -13,5 +13,6 @@
     "src/platform/desktop/main/**/*.ts",
     "src/platform/desktop/preload/**/*.ts",
     "tests/**/*.ts"
-  ]
+  ],
+  "exclude": ["tests/unit/workspace-editor.test.ts"]
 }

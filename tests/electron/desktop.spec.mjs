@@ -32,7 +32,7 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await expect(page.getByRole('heading', { name: 'Нет открытых документов' })).toBeVisible();
-    await expect(page.getByRole('status')).toContainText('SQLite готова · схема 1');
+    await expect(page.getByRole('status')).toContainText('SQLite готова · схема 2');
     expect(
       await page.evaluate(async () => ({
         methods: Object.keys(window.desktop).sort(),
@@ -46,7 +46,7 @@ test('React, sandbox, IPC, SQLite, навигация и один экземпл
       node: 'undefined',
       process: 'undefined',
       info: { ok: true, value: { appVersion: '0.1.0' } },
-      health: { ok: true, value: { schemaVersion: 1 } },
+      health: { ok: true, value: { schemaVersion: 2 } },
     });
     const runtime = await app.evaluate(({ BrowserWindow, app }) => {
       const prefs = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();

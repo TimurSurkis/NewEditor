@@ -49,6 +49,13 @@ export interface ReadLocalFile {
   readonly stamp: readonly string[];
 }
 
+export interface ReadFileBytes {
+  readonly bytes: Buffer;
+  readonly storageRevision: StorageRevision;
+  readonly contentHash: string;
+  readonly stamp: readonly string[];
+}
+
 function stamp(stat: BigIntStats): readonly string[] {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.nlink].map(
     String,
@@ -63,22 +70,16 @@ function sameStamp(left: BigIntStats, right: BigIntStats): boolean {
 const changed = () =>
   localFailure('busy', 'Файл изменился во время чтения; повторите чтение', true);
 
-export function createFileReader(io: FileReadIO = nodeIO) {
-  return async function readLocalFile(
+export function createFileProbe(io: FileReadIO = nodeIO) {
+  return async function readFileBytes(
     canonicalPath: string,
-    hint?: RepresentationHint,
-  ): Promise<Result<ReadLocalFile, PortError>> {
+  ): Promise<Result<ReadFileBytes, PortError>> {
     if (
       !isAbsolute(canonicalPath) ||
       canonicalPath.includes('\0') ||
       resolve(canonicalPath) !== canonicalPath
     )
       return localFailure('invalid-input', 'Ожидается канонический абсолютный путь файла');
-    // Снимок параметров до первого await; caller не может подменить подсказку в полёте.
-    const representation = hint && {
-      contentHash: hint.contentHash,
-      fileMetadata: { ...hint.fileMetadata },
-    };
     let observed = false;
     try {
       const pathBefore = await io.lstat(canonicalPath);
@@ -90,23 +91,18 @@ export function createFileReader(io: FileReadIO = nodeIO) {
       try {
         const before = await handle.stat();
         if (!before.isFile() || !sameStamp(before, pathBefore)) return changed();
-        const bytes = await handle.readFile();
+        const bytes = Buffer.from(await handle.readFile());
         const after = await handle.stat();
         if (!sameStamp(before, after) || BigInt(bytes.length) !== after.size) return changed();
         const pathAfter = await io.lstat(canonicalPath);
         if (!pathAfter.isFile() || !sameStamp(after, pathAfter)) return changed();
         if ((await io.realpath(canonicalPath)) !== canonicalPath) return changed();
         const contentHash = createHash('sha256').update(bytes).digest('hex');
-        const decoded = decodeFile(
-          bytes,
-          representation?.contentHash === contentHash ? representation.fileMetadata : undefined,
-        );
-        if (!decoded.ok) return decoded;
         const fileStamp = Object.freeze(stamp(after));
         return {
           ok: true,
           value: Object.freeze({
-            snapshot: decoded.value,
+            bytes,
             contentHash,
             stamp: fileStamp,
             storageRevision: `local-v1:${createHash('sha256')
@@ -121,5 +117,37 @@ export function createFileReader(io: FileReadIO = nodeIO) {
       const result = fileFailure(error);
       return observed && result.error.code === 'not-found' ? changed() : result;
     }
+  };
+}
+
+export function createFileReader(io: FileReadIO = nodeIO) {
+  const probe = createFileProbe(io);
+  return async function readLocalFile(
+    canonicalPath: string,
+    hint?: RepresentationHint,
+  ): Promise<Result<ReadLocalFile, PortError>> {
+    // Снимок параметров до первого await; caller не может подменить подсказку в полёте.
+    const representation = hint && {
+      contentHash: hint.contentHash,
+      fileMetadata: { ...hint.fileMetadata },
+    };
+    const raw = await probe(canonicalPath);
+    if (!raw.ok) return raw;
+    const decoded = decodeFile(
+      raw.value.bytes,
+      representation?.contentHash === raw.value.contentHash
+        ? representation.fileMetadata
+        : undefined,
+    );
+    if (!decoded.ok) return decoded;
+    return {
+      ok: true,
+      value: Object.freeze({
+        snapshot: decoded.value,
+        storageRevision: raw.value.storageRevision,
+        contentHash: raw.value.contentHash,
+        stamp: raw.value.stamp,
+      }),
+    };
   };
 }

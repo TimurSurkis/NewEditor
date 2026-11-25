@@ -12,6 +12,9 @@ export function fileFailure(error: unknown): { readonly ok: false; readonly erro
   const code =
     error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
   switch (code) {
+    case 'SQLITE_BUSY':
+    case 'SQLITE_LOCKED':
+      return localFailure('busy', 'Служебная база временно занята', true);
     case 'ENOENT':
       return localFailure('not-found', 'Файл или его каталог не найден');
     case 'EACCES':
@@ -19,12 +22,15 @@ export function fileFailure(error: unknown): { readonly ok: false; readonly erro
       return localFailure('permission-denied', 'Нет доступа к файлу');
     case 'ELOOP':
     case 'EISDIR':
+    case 'ENOTSUP':
+    case 'EOPNOTSUPP':
+    case 'EXDEV':
       return localFailure('unsupported', 'Путь не является поддерживаемым обычным файлом');
     case 'EBUSY':
     case 'ETXTBSY':
     case 'EAGAIN':
       return localFailure('busy', 'Файл временно занят', true);
     default:
-      return localFailure('io-error', 'Не удалось прочитать файл', true);
+      return localFailure('io-error', 'Ошибка операции с файлом', true);
   }
 }

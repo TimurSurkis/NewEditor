@@ -8,12 +8,20 @@ await build({
   configFile: false,
   publicDir: false,
   build: {
-    ssr: 'tests/native/local-persistence.test.ts',
+    ssr: true,
     outDir: 'out/native-tests',
-    emptyOutDir: false,
+    emptyOutDir: true,
     target: 'node24',
     minify: false,
-    rollupOptions: { output: { entryFileNames: 'local-persistence.test.mjs' } },
+    rollupOptions: {
+      input: {
+        'local-persistence.test': 'tests/native/local-persistence.test.ts',
+        'save-journal.test': 'tests/native/save-journal.test.ts',
+        'drafts-events.test': 'tests/native/drafts-events.test.ts',
+        'save-crash-worker': 'tests/native/save-crash-worker.ts',
+      },
+      output: { entryFileNames: '[name].mjs' },
+    },
   },
 });
 
@@ -24,6 +32,8 @@ const result = spawnSync(
     '--test',
     'tests/native/database.test.mjs',
     'out/native-tests/local-persistence.test.mjs',
+    'out/native-tests/save-journal.test.mjs',
+    'out/native-tests/drafts-events.test.mjs',
   ],
   {
     stdio: 'inherit',

@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import type Database from 'better-sqlite3';
-import { copyFrozen, validateSnapshot } from '../../../../core';
+import { copyFrozen, equalSnapshots, validateSnapshot } from '../../../../core';
 import type { DocumentFormat, DocumentSnapshot, FileMetadata } from '../../../../core';
-import type { VersionSummary } from '../../../../ports';
+import type { SaveReceipt, SaveRequest, VersionSummary } from '../../../../ports';
 import { encodeFile } from './codec';
 import type { ReadLocalFile, RepresentationHint } from './file-reader';
 
@@ -122,7 +122,7 @@ export function createLocalRepository(db: Database.Database, id: () => string, n
     VALUES (?, ?, ?, ?, 1, ?)`);
   const insertVersion = db.prepare(`INSERT INTO saved_versions
     (version_id, resource_id, sequence, saved_at, origin, snapshot_json, content_hash)
-    VALUES (?, ?, ?, ?, 'initial', ?, ?)`);
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const updateRead = db.prepare(`UPDATE local_resources SET
     representation_json = ?, content_hash = ?, last_revision = ?, next_version = ? WHERE resource_id = ?`);
 
@@ -153,6 +153,7 @@ export function createLocalRepository(db: Database.Database, id: () => string, n
         resourceId,
         next,
         integer(now()),
+        'initial',
         JSON.stringify({ version: 1, snapshot: read.snapshot }),
         read.contentHash,
       );
@@ -185,6 +186,64 @@ export function createLocalRepository(db: Database.Database, id: () => string, n
     register,
     hasPending: (resourceId: string): boolean => active.get(resourceId) !== undefined,
     recordRead,
+    completeSave: db.transaction(
+      (request: SaveRequest, old: DocumentSnapshot | null, receipt: SaveReceipt): SaveReceipt => {
+        const resourceId = request.target.ref.resourceId;
+        const row = get(resourceId);
+        if (!row) throw new Error('Ресурс отсутствует');
+        const last = versions.get(resourceId);
+        let latest: DocumentSnapshot | null = null;
+        let next = row.nextVersion;
+        if (last !== undefined) {
+          const saved = object(last);
+          integer(saved['saved_at']);
+          const sequence = integer(saved['sequence'], 1);
+          if (!Number.isSafeInteger(sequence + 1) || next !== sequence + 1)
+            throw new Error('Нарушен счётчик истории');
+          latest = snapshot(saved['snapshot_json'], saved['content_hash']);
+        } else if (next !== 1) throw new Error('Отсутствует прежняя история');
+        const append = (
+          state: DocumentSnapshot,
+          origin: 'initial' | 'before-overwrite' | 'save',
+        ): string | null => {
+          if (latest && equalSnapshots(latest, state)) return null;
+          if (!Number.isSafeInteger(next + 1)) throw new Error('Переполнение счётчика истории');
+          const encoded = encodeFile(state);
+          if (!encoded.ok) throw new Error('Некорректный снимок истории');
+          const versionId = text(id());
+          insertVersion.run(
+            versionId,
+            resourceId,
+            next++,
+            integer(now()),
+            origin,
+            JSON.stringify({ version: 1, snapshot: state }),
+            createHash('sha256').update(encoded.value).digest('hex'),
+          );
+          latest = state;
+          return versionId;
+        };
+        if (old) append(old, latest ? 'before-overwrite' : 'initial');
+        const versionId = append(request.snapshot, 'save');
+        const encoded = encodeFile(request.snapshot);
+        if (!encoded.ok) throw new Error('Некорректный сохранённый снимок');
+        updateRead.run(
+          JSON.stringify({ version: 1, fileMetadata: request.snapshot.fileMetadata }),
+          createHash('sha256').update(encoded.value).digest('hex'),
+          receipt.storageRevision,
+          next,
+          resourceId,
+        );
+        db.prepare(
+          'UPDATE local_resources SET document_id = ?, format = ? WHERE resource_id = ?',
+        ).run(request.documentId, request.format, resourceId);
+        db.prepare(
+          `DELETE FROM saved_versions WHERE resource_id = ? AND version_id NOT IN
+        (SELECT version_id FROM saved_versions WHERE resource_id = ? ORDER BY sequence DESC LIMIT 5)`,
+        ).run(resourceId, resourceId);
+        return copyFrozen({ ...receipt, versionId });
+      },
+    ),
     list(resourceId: string): readonly VersionSummary[] {
       return copyFrozen(
         versions.all(resourceId).map((value) => {

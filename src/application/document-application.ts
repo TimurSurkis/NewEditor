@@ -259,12 +259,16 @@ class Application implements DocumentApplication {
   async reload(
     id: SessionId,
     intent: 'if-clean' | 'discard-local',
+    expected?: { readonly stateRevision: number; readonly storageRevision: string },
   ): Promise<Result<void, PortError>> {
+    const guard = expected ? { ...expected } : undefined;
     const s = this.sessions.get(id);
     if (!s) return { ok: false, error: missing() };
     const ref = s.view.edit.document.location;
     if (!ref) return { ok: false, error: error('target-required', 'Документ ещё не сохранён') };
     if (s.closing || s.running || blockedSave(s)) return { ok: false, error: busy() };
+    if (guard && guard.stateRevision !== s.view.edit.stateRevision)
+      return { ok: false, error: busy() };
     const sequence = ++s.readSequence,
       generation = s.saveGeneration,
       revision = s.view.edit.stateRevision;
@@ -280,7 +284,12 @@ class Application implements DocumentApplication {
     )
       return { ok: false, error: busy() };
     if (!loaded.ok) {
-      if (loaded.error.code === 'not-found') this.publish(s, { conflict: { kind: 'deleted' } });
+      this.publish(s, {
+        conflict:
+          loaded.error.code === 'not-found'
+            ? { kind: 'deleted' }
+            : { kind: 'changed', observed: null },
+      });
       return loaded;
     }
     if (
@@ -293,6 +302,10 @@ class Application implements DocumentApplication {
       };
     if (loaded.value.storageRevision === s.view.storageRevision && intent === 'if-clean')
       return ok(undefined);
+    if (guard && guard.storageRevision !== loaded.value.storageRevision) {
+      this.publish(s, { conflict: { kind: 'changed', observed: loaded.value } });
+      return { ok: false, error: busy() };
+    }
     if (s.view.isDirty && intent === 'if-clean') {
       this.publish(s, { conflict: { kind: 'changed', observed: loaded.value } });
       return ok(undefined);
@@ -326,6 +339,7 @@ class Application implements DocumentApplication {
       baseline: loaded.value.snapshot,
       storageRevision: loaded.value.storageRevision,
       conflict: { kind: 'none' },
+      save: { kind: 'idle' },
     });
     return this.clearDraft(s, applied.value.state.stateRevision);
   }

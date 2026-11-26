@@ -107,3 +107,17 @@
   padding: 8px;
   background: #fff0ed;
 }
+.workspace-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+.workspace-comparison pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 20rem;
+  overflow: auto;
+  background: #fff;
+  padding: 0.75rem;
+  border: 1px solid #ccd2dc;
+}

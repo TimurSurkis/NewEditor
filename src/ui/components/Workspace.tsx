@@ -63,6 +63,9 @@ export function Workspace({
         >
           {state.opening ? 'Открытие…' : 'Открыть…'}
         </button>
+        <button disabled={state.ending} onClick={() => void workspace.refreshExternal()}>
+          Проверить изменения
+        </button>
         {active && (
           <>
             <button
@@ -227,6 +230,64 @@ export function Workspace({
                 </p>
               )}
               <SourcePanel key={active.id} id={active.id} editor={editor} />
+              {active.externalError && <p role="alert">Проверка файла: {active.externalError}</p>}
+              {active.view.conflict.kind !== 'none' && (
+                <section aria-label="Внешние изменения" className="workspace-conflict">
+                  <h2>
+                    {active.view.conflict.kind === 'deleted'
+                      ? 'Файл удалён. Рабочая копия сохранена в редакторе.'
+                      : 'Файл изменён вне редактора. Рабочая копия не перезаписана.'}
+                  </h2>
+                  <button
+                    disabled={active.saving || state.ending}
+                    onClick={() => void workspace.save(active.id, true)}
+                  >
+                    Сохранить копию…
+                  </button>
+                  <p>
+                    Можно оставить рабочую копию и продолжить редактирование. Обычная запись в
+                    конфликтующий исходник заблокирована.
+                  </p>
+                  <div className="workspace-comparison">
+                    <div>
+                      <h3>
+                        Рабочая копия · {active.view.edit.document.fileMetadata.encoding}
+                        {active.view.edit.document.fileMetadata.bom ? ' · BOM' : ''}
+                      </h3>
+                      <pre aria-label="Рабочая копия">{active.view.edit.document.text}</pre>
+                    </div>
+                    {active.view.conflict.kind === 'changed' && active.view.conflict.observed && (
+                      <div>
+                        <h3>
+                          Внешний файл ·{' '}
+                          {active.view.conflict.observed.snapshot.fileMetadata.encoding}
+                          {active.view.conflict.observed.snapshot.fileMetadata.bom ? ' · BOM' : ''}
+                        </h3>
+                        <pre aria-label="Внешний файл">
+                          {active.view.conflict.observed.snapshot.text}
+                        </pre>
+                        <button
+                          disabled={active.saving || state.ending}
+                          onClick={() => {
+                            const conflict = active.view.conflict;
+                            if (conflict.kind === 'changed' && conflict.observed)
+                              void workspace.acceptExternal(active.id, {
+                                stateRevision: active.view.edit.stateRevision,
+                                storageRevision: conflict.observed.storageRevision,
+                              });
+                          }}
+                        >
+                          Загрузить файл вместо рабочей копии
+                        </button>
+                        <p>
+                          Эта команда отбросит показанные несохранённые правки и очистит undo. Если
+                          текст или файл изменятся, решение потребуется повторить.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
             </section>
           )}
         </>

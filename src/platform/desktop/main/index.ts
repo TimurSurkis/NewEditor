@@ -3,7 +3,7 @@ import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type { PortError } from '../../../ports';
-import { channels, closeRequested } from '../shared/contracts';
+import { channels, closeRequested, resourceNotification } from '../shared/contracts';
 import type { DesktopIpcMap } from '../shared/contracts';
 import { openServiceDatabase } from './database';
 import type { ServiceDatabase } from './database';
@@ -130,10 +130,20 @@ async function createWindow(): Promise<void> {
               return result.response === 0 ? 'save' : result.response === 1 ? 'discard' : 'cancel';
             },
           },
+          (notification) => {
+            if (!next.isDestroyed()) next.webContents.send(resourceNotification, notification);
+          },
         )
       : null;
   };
   resetClient();
+  next.on('focus', () => {
+    const task = fileIpc?.refreshResources(null);
+    if (task) {
+      pending.add(task);
+      void task.finally(() => pending.delete(task));
+    }
+  });
   next.webContents.on('did-navigate', () => {
     rendererReady = false;
     closeWaiting = false;
@@ -259,6 +269,9 @@ async function createWindow(): Promise<void> {
           }
         }
         if (!files) return fileIpcFailure(channel, unavailable().error, input);
+        if (channel === channels.watchResource) return files.watchResource(input);
+        if (channel === channels.unwatchResource) return files.unwatchResource(input);
+        if (channel === channels.refreshResources) return files.refreshResources(input);
         if (channel === channels.pickOpen) return files.pickOpen(input);
         if (channel === channels.loadDocument) return files.loadDocument(input);
         if (channel === channels.pickSave) return files.pickSave(input);

@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { Result } from '../../../core';
 import type { PortError, SaveResult } from '../../../ports';
-import { channels, closeRequested } from '../shared/contracts';
-import type { DesktopApi } from '../shared/contracts';
+import { channels, closeRequested, resourceNotification } from '../shared/contracts';
+import type { DesktopApi, ResourceNotification } from '../shared/contracts';
 
 async function request<T>(
   channel: (typeof channels)[keyof typeof channels],
@@ -39,6 +39,26 @@ const desktop: DesktopApi = {
     };
   },
   resolveClose: (proceed) => request(channels.resolveClose, { proceed }),
+  refreshResources: () => request(channels.refreshResources),
+  watchResource(ref, listener, onError) {
+    const subscriptionId = crypto.randomUUID();
+    let active = true;
+    const callback = (_event: Electron.IpcRendererEvent, notification: ResourceNotification) => {
+      if (!active || notification.subscriptionId !== subscriptionId) return;
+      if ('error' in notification) onError(notification.error);
+      else listener(notification.event);
+    };
+    ipcRenderer.on(resourceNotification, callback);
+    void request<null>(channels.watchResource, { ref, subscriptionId }).then((result) => {
+      if (active && !result.ok) onError(result.error);
+    });
+    return () => {
+      if (!active) return;
+      active = false;
+      ipcRenderer.removeListener(resourceNotification, callback);
+      void request(channels.unwatchResource, { subscriptionId });
+    };
+  },
 };
 
 async function write(channel: string, input: unknown, operationId: string): Promise<SaveResult> {

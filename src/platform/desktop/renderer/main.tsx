@@ -13,8 +13,9 @@ const application = createDocumentApplication({
   newId: () => crypto.randomUUID(),
   now: () => performance.now(),
 });
+const storage = createRendererStorage(window.desktop);
 const documents = createDocumentApplication({
-  storage: createRendererStorage(window.desktop),
+  storage,
   newId: () => crypto.randomUUID(),
   now: () => performance.now(),
 });
@@ -27,6 +28,7 @@ const workspace = createWorkspaceApplication(
     pickSave: (input) => window.desktop.pickSave(input),
     confirmClose: (displayName) => window.desktop.confirmClose(displayName),
   },
+  storage.events ?? undefined,
 );
 const synchronize = () => {
   const state = workspace.getSnapshot();
@@ -64,6 +66,7 @@ const beforeUnload = (event: BeforeUnloadEvent) => {
     !state.tabs.some(
       (tab) =>
         tab.view.isDirty ||
+        tab.view.conflict.kind !== 'none' ||
         tab.saving ||
         ['saving', 'unknown', 'history-pending'].includes(tab.view.save.kind),
     )

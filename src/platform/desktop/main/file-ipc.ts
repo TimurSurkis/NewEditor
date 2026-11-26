@@ -13,6 +13,7 @@ import { draftRevision, parseDraftKey } from './persistence/draft-data';
 import { localFailure } from './persistence/errors';
 import { resolveLocalPath } from './persistence/path-registry';
 import { createFileProbe } from './persistence/file-reader';
+import type { ResourceNotification } from '../shared/contracts';
 
 export interface FileDialogs {
   pickSave(
@@ -46,11 +47,79 @@ export function createFileIpc(
   client: LocalClient,
   pickPaths: () => Promise<readonly string[] | null>,
   dialogs?: FileDialogs,
+  notify?: (notification: ResourceNotification) => void,
 ) {
   let active = true;
+  const watches = new Map<string, { stop: (() => void) | null }>();
+  const subscriptionId = (input: unknown) => {
+    const id = nonempty(input);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))
+      throw new Error('subscriptionId');
+    return id;
+  };
   let picking: Promise<Result<OpenDialogResult | null, PortError>> | null = null;
   const denied = () => localFailure('permission-denied', 'Окно документа закрыто');
   return {
+    async watchResource(input: unknown): Promise<Result<null, PortError>> {
+      if (!active) return denied();
+      if (!notify) return localFailure('unsupported', 'Наблюдение не подключено');
+      let id: string, target: StorageRef;
+      try {
+        const data = fields(input, ['ref', 'subscriptionId']);
+        id = subscriptionId(data['subscriptionId']);
+        target = ref(data['ref']);
+      } catch {
+        return localFailure('invalid-input', 'Некорректная подписка');
+      }
+      if (watches.has(id)) return localFailure('invalid-input', 'Подписка уже существует');
+      const entry = { stop: null as (() => void) | null };
+      watches.set(id, entry);
+      try {
+        const allowed = await client.describeResource(target);
+        if (!active || watches.get(id) !== entry) return denied();
+        if (!allowed.ok) {
+          watches.delete(id);
+          return allowed;
+        }
+        const send = (data: ResourceNotification) => {
+          if (active && watches.get(id) === entry) notify(data);
+        };
+        entry.stop = client.events.watch(
+          target,
+          (event) => send({ subscriptionId: id, event }),
+          (error) => send({ subscriptionId: id, error }),
+        );
+        return { ok: true, value: null };
+      } catch {
+        watches.delete(id);
+        entry.stop?.();
+        return localFailure('io-error', 'Не удалось наблюдать за файлом');
+      }
+    },
+    async unwatchResource(input: unknown): Promise<Result<null, PortError>> {
+      if (!active) return denied();
+      let id: string;
+      try {
+        id = subscriptionId(fields(input, ['subscriptionId'])['subscriptionId']);
+      } catch {
+        return localFailure('invalid-input', 'Некорректная отписка');
+      }
+      const entry = watches.get(id);
+      if (!entry) return localFailure('permission-denied', 'Подписка не принадлежит этому окну');
+      watches.delete(id);
+      entry.stop?.();
+      return { ok: true, value: null };
+    },
+    async refreshResources(input: unknown): Promise<Result<null, PortError>> {
+      if (input !== null) return localFailure('invalid-input', 'Ожидается пустой запрос');
+      if (!active) return denied();
+      try {
+        await client.refreshResources();
+        return active ? { ok: true, value: null } : denied();
+      } catch {
+        return localFailure('io-error', 'Не удалось проверить изменения файлов');
+      }
+    },
     async pickSave(input: unknown): Promise<Result<SaveDialogResult | null, PortError>> {
       if (!active) return denied();
       if (!dialogs) return localFailure('unsupported', 'Диалог сохранения не подключён');
@@ -229,6 +298,8 @@ export function createFileIpc(
     },
     close() {
       active = false;
+      for (const entry of watches.values()) entry.stop?.();
+      watches.clear();
       client.close();
     },
   };

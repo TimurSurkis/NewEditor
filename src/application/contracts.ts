@@ -72,6 +72,7 @@ export interface DocumentApplication {
   reload(
     sessionId: SessionId,
     intent: 'if-clean' | 'discard-local',
+    expected?: { readonly stateRevision: Revision; readonly storageRevision: StorageRevision },
   ): Promise<Result<void, PortError>>;
   close(
     sessionId: SessionId,

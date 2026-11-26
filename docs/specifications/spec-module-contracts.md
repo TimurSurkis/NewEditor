@@ -1,12 +1,12 @@
 # Контракты модулей и локального транспорта
 
-Статус: **контракты P0.2 зафиксированы и уточнены по P5.3**.
+Статус: **контракты P0.2 зафиксированы и уточнены по P5.4**.
 Редакция: 2026-11-26.
 Основание: [архитектура](spec-architecture.md), [модель документа](spec-document-model.md). Детали локального адаптера: [сохранение P4](spec-local-persistence.md).
 
 Ниже описаны публичные границы. В P2 реализованы ядро и сценарии приложения, добавлен тестовый адаптер хранения; реальные файловые операции и основной IPC относятся к P4–P7. Порты используют обычные данные и Promise; реализации подключаются в точке запуска. Результаты: [отчёт P2](../trackers/track-document-core.md).
 
-Результат P4: main-only фабрика реализует DocumentStore с журналом, историю, черновики и наблюдение с правами владельца. P5.1–P5.3 подключают открытие/редактирование/сохранение и закрытие через IPC/UI; ресурсные подписки renderer относятся к P5.4, интерфейс истории/восстановления — к P7.
+Результат P4: main-only фабрика реализует DocumentStore с журналом, историю, черновики и наблюдение с правами владельца. P5.1–P5.4 подключают открытие/редактирование/сохранение, закрытие и ресурсные подписки/сравнение через IPC/UI; интерфейс истории/восстановления относится к P7.
 
 ## 1. Владение контрактами
 
@@ -214,7 +214,7 @@ export interface DocumentApplication {
   save(sessionId: SessionId, target?: SaveTarget): Promise<SaveResult>;
   reconcileSave(sessionId: SessionId): Promise<SaveResult>;
   flushDraft(sessionId: SessionId): Promise<Result<void, PortError>>;
-  reload(sessionId: SessionId, intent: 'if-clean' | 'discard-local'): Promise<Result<void, PortError>>;
+  reload(sessionId: SessionId, intent: 'if-clean' | 'discard-local', expected?: { readonly stateRevision: Revision; readonly storageRevision: StorageRevision }): Promise<Result<void, PortError>>;
   close(sessionId: SessionId, decision: 'cancel' | 'discard' | 'save', target?: SaveTarget): Promise<Result<{ readonly closed: boolean }, PortError>>;
 }
 
@@ -254,15 +254,16 @@ export interface DesktopIpcMap {
   'draft:put': IpcEntry<DraftRecord, Result<{ readonly accepted: boolean }, PortError>>;
   'draft:list': IpcEntry<null, Result<readonly DraftRecord[], PortError>>;
   'draft:remove': IpcEntry<{ readonly key: DraftKey; readonly through: Revision }, Result<null, PortError>>;
-  'resource:watch': IpcEntry<{ readonly ref: StorageRef }, Result<{ readonly subscriptionId: string }, PortError>>;
+  'resource:watch': IpcEntry<{ readonly ref: StorageRef; readonly subscriptionId: string }, Result<null, PortError>>;
   'resource:unwatch': IpcEntry<{ readonly subscriptionId: string }, Result<null, PortError>>;
+  'resource:refresh': IpcEntry<null, Result<null, PortError>>;
   'asset:add': IpcEntry<{ readonly owner: StorageRef; readonly payload: AssetPayload }, Result<{ readonly relativeUrl: string }, PortError>>;
   'asset:resolve': IpcEntry<{ readonly owner: StorageRef; readonly relativeUrl: string }, Result<AssetPayload, PortError>>;
 }
 
 export interface DesktopEventMap {
   'window:close-request': null;
-  'resource:changed': { readonly subscriptionId: string; readonly event: ResourceEvent };
+  'resource:notification': { readonly subscriptionId: string } & ({ readonly event: ResourceEvent } | { readonly error: PortError });
   'app:open-files': { readonly refs: readonly StorageRef[] };
 }
 ```
@@ -298,7 +299,7 @@ export interface DesktopEventMap {
 - `save` без target использует location и последнюю известную ревизию. Для нового документа возвращает `not-written/target-required`, после чего UI получает цель через диалог и повторяет сценарий.
 - Перед save, сменой режима или закрытием UI завершает композицию активного редактора через `flush` из контракта редакторов. Данные сохраняются после подтверждённого применения композиции.
 - `save` при активной записи объединяет повторные намерения в одно следующее сохранение; вызовы ожидают результат записи соответствующего следующего снимка. При частичном или неизвестном исходе новые записи приостанавливаются до `reconcileSave`.
-- `reload('if-clean')` не отбрасывает правки. `discard-local` вызывается только после явного выбора пользователя. В обоих случаях запоздавший результат проверяется по session/stateRevision и номеру чтения.
+- `reload('if-clean')` не отбрасывает правки. `discard-local` вызывается только после явного выбора пользователя. В обоих случаях запоздавший результат проверяется по session/stateRevision и номеру чтения. При принятии сравнения P5.4 передаётся expected с показанной stateRevision и внешней storageRevision; копия guard захватывается до await. Несовпадение отменяет discard и оставляет рабочий текст. Ошибка чтения означает deleted либо changed без доступного снимка, а не пустой текст; успешный reload очищает прежний failed-save.
 - `close('cancel')` возвращает `closed: false`. `discard` очищает черновик через текущую ревизию и закрывает сессию; при ошибке очистки сессия остаётся открытой. `save` закрывает только после `saved`, если текущий снимок совпадает с подтверждённым и нет конфликта. Если во время ожидания появились новые правки, возвращается `closed: false`: они остаются в открытой сессии. На время окончательной очистки черновика и закрытия новые изменения сессии блокируются. Незавершённая/неизвестная операция даёт `busy`; её сначала разрешают.
 - Отмена диалога — успешный результат с `null`, а не ошибка и не изменение состояния.
 
@@ -320,7 +321,7 @@ export interface DesktopEventMap {
 
 P1 реализует `app:info` и `storage:health` для запуска и проверки нативной SQLite. Остальные обработчики вводятся вместе с модулями P4–P7. Диагностические операции возвращают сведения приложения/схемы, а не принимают произвольный SQL.
 
-P5.1 подключает `dialog:open`, `document:load` и `draft:remove` по [спецификации UI](spec-desktop-ui.md). Диалог возвращает непрозрачные ref/имена и отдельные ошибки пачки; полные пути не передаются. P5.3 добавляет `dialog:save`, `document:save`, `operation:get`, `operation:reconcile`, `dialog:close` и handshake окна `window:ready` / `window:close-request` / `window:resolve-close`. Выбор Save As фиксирует ревизию до подтверждения замены и возвращает basename/target, не путь. Ошибки save возвращаются как not-written при известном отказе до записи; потеря ответа — unknown. Отказ reconcile также unknown, не Result. Renderer-адаптер для ещё не подключённых history/draft-put/list/events возвращает unsupported или null, не имитирует успех. Main отзывает клиента после фактического закрытия/новой загрузки renderer, дожидается принятых IPC перед закрытием SQLite; отменённое закрытие оставляет сервис доступным.
+P5.1 подключает `dialog:open`, `document:load` и `draft:remove` по [спецификации UI](spec-desktop-ui.md). Диалог возвращает непрозрачные ref/имена и отдельные ошибки пачки; полные пути не передаются. P5.3 добавляет `dialog:save`, `document:save`, `operation:get`, `operation:reconcile`, `dialog:close` и handshake окна `window:ready` / `window:close-request` / `window:resolve-close`. Выбор Save As фиксирует ревизию до подтверждения замены и возвращает basename/target, не путь. Ошибки save возвращаются как not-written при известном отказе до записи; потеря ответа — unknown. Отказ reconcile также unknown, не Result. P5.4 подключает resource:watch/unwatch/refresh и notification; preload выбирает UUID подписки до запроса и ставит listener до invoke, main проверяет выданный ref и владение ID. Это уточняет ранний эскиз server-generated ID, устраняя гонку события до ответа и немедленной отписки. Focus-refresh включён в учёт незавершённых операций выхода. Renderer-адаптер для ещё не подключённых history/draft-put/list возвращает unsupported, не имитирует успех. Main отзывает клиента после фактического закрытия/новой загрузки renderer, дожидается принятых IPC перед закрытием SQLite; отменённое закрытие оставляет сервис доступным.
 
 Preload предоставляет фиксированные методы, соответствующие таблице каналов; renderer не получает универсальный `send(channel, payload)`. Каждый аргумент проходит runtime-проверку в main: строки ID, целые ревизии, структура снимка и разрешённые ссылки на ресурсы. TypeScript не заменяет проверку входных данных.
 

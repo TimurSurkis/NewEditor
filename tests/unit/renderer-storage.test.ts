@@ -49,8 +49,17 @@ it('renderer передаёт load/save/operation/clear через фиксир�
     async resolveClose() {
       return { ok: true, value: null };
     },
+    watchResource: vi.fn(() => () => {}),
+    async refreshResources() {
+      return { ok: true, value: null };
+    },
   };
   const storage = createRendererStorage(api);
+  const listener = vi.fn(),
+    onError = vi.fn();
+  const stop = storage.events!.watch(ref, listener, onError);
+  expect(api.watchResource).toHaveBeenCalledWith(ref, listener, onError);
+  stop();
   await storage.documents.load(ref, null);
   expect(api.loadDocument).toHaveBeenCalledWith(ref);
   expect(await storage.drafts.removeThrough(key, 4)).toEqual({ ok: true, value: undefined });

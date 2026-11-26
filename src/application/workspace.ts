@@ -1,5 +1,6 @@
 import type { DocumentFormat, Result, StorageRef } from '../core';
-import type { PortError, SaveResult, SaveTarget } from '../ports';
+import type { PortError, ResourceEvents, SaveResult, SaveTarget } from '../ports';
+import { createWorkspaceObservation } from './workspace-observation';
 import type { CommandError, DocumentApplication, SessionView } from './contracts';
 
 export interface OpenDialogResult {
@@ -26,6 +27,7 @@ export interface WorkspaceTab {
   readonly view: SessionView;
   readonly closing: boolean;
   readonly saving: boolean;
+  readonly externalError: string | null;
 }
 export interface WorkspaceSnapshot {
   readonly tabs: readonly WorkspaceTab[];
@@ -45,6 +47,11 @@ export interface WorkspaceApplication {
   closeAll(): Promise<boolean>;
   save(id: string, saveAs?: boolean): Promise<SaveResult | null>;
   reconcile(id: string): Promise<void>;
+  refreshExternal(): Promise<void>;
+  acceptExternal(
+    id: string,
+    expected: { readonly stateRevision: number; readonly storageRevision: string },
+  ): Promise<void>;
   clearErrors(): void;
   dispose(): void;
 }
@@ -54,6 +61,7 @@ export function createWorkspaceApplication(
   pickOpen: () => Promise<Result<OpenDialogResult | null, PortError>>,
   beforeLeave?: (id: string) => Promise<Result<void, CommandError>>,
   dialogs?: WorkspaceDialogs,
+  events?: ResourceEvents,
 ): WorkspaceApplication {
   let snapshot: WorkspaceSnapshot = Object.freeze({
     tabs: Object.freeze([]),
@@ -71,9 +79,11 @@ export function createWorkspaceApplication(
   const saves = new Map<string, Promise<SaveResult | null>>(),
     selectedNames = new Map<string, string>();
   let closingIntent: Promise<boolean> | null = null;
+  let observation: ReturnType<typeof createWorkspaceObservation> | undefined;
   const publish = (changes: Partial<WorkspaceSnapshot>) => {
     if (!live) return;
     snapshot = Object.freeze({ ...snapshot, ...changes });
+    observation?.synchronize(snapshot.tabs);
     for (const listener of [...listeners]) {
       try {
         listener();
@@ -129,14 +139,14 @@ export function createWorkspaceApplication(
     publish({
       tabs: Object.freeze([
         ...snapshot.tabs,
-        Object.freeze({ id, name, view, closing: false, saving: false }),
+        Object.freeze({ id, name, view, closing: false, saving: false, externalError: null }),
       ]),
       activeId: activate ? id : snapshot.activeId,
     });
   };
   const updateTab = (
     id: string,
-    changes: Partial<Pick<WorkspaceTab, 'name' | 'saving' | 'closing'>>,
+    changes: Partial<Pick<WorkspaceTab, 'name' | 'saving' | 'closing' | 'externalError'>>,
   ) =>
     publish({
       tabs: Object.freeze(
@@ -168,7 +178,7 @@ export function createWorkspaceApplication(
       return false;
     }
     const revision = tab.view.edit.stateRevision;
-    if (tab.view.isDirty) {
+    if (tab.view.isDirty || tab.view.conflict.kind !== 'none') {
       if (!dialogs) {
         issue('Есть несохранённые изменения. Закрытие с выбором сохранения не подключено.');
         return false;
@@ -186,7 +196,7 @@ export function createWorkspaceApplication(
       }
       if (beforeLeave && !(await leave(id))) return false;
       if (decision === 'save') {
-        const result = await workspace.save(id);
+        const result = await workspace.save(id, tab.view.conflict.kind !== 'none');
         if (!result || result.kind !== 'saved') return false;
         if (beforeLeave && !(await leave(id))) return false;
         if (documents.getSnapshot(id)?.isDirty) {
@@ -384,21 +394,43 @@ export function createWorkspaceApplication(
       return task;
     },
     async reconcile(id) {
-      if (!live || saves.has(id)) return;
+      if (!live || saves.has(id) || snapshot.tabs.find((tab) => tab.id === id)?.saving) return;
       publish({ errors: Object.freeze([]) });
       if (beforeLeave && !(await leave(id))) return;
-      const result = await documents.reconcileSave(id);
-      if (live) feedback(id, result);
+      updateTab(id, { saving: true });
+      try {
+        const result = await documents.reconcileSave(id);
+        if (live) feedback(id, result);
+      } finally {
+        updateTab(id, { saving: false });
+      }
+    },
+    async refreshExternal() {
+      await observation?.refresh();
+    },
+    async acceptExternal(id, expected) {
+      await observation?.accept(id, expected);
     },
     clearErrors() {
       if (snapshot.errors.length) publish({ errors: Object.freeze([]) });
     },
     dispose() {
       live = false;
+      observation?.dispose();
       for (const stop of stops.values()) stop();
       stops.clear();
       listeners.clear();
     },
   };
+  if (events)
+    observation = createWorkspaceObservation(
+      documents,
+      events,
+      beforeLeave,
+      (id, externalError) => {
+        if (snapshot.tabs.find((tab) => tab.id === id)?.externalError !== externalError)
+          updateTab(id, { externalError });
+      },
+    );
   return workspace;
 }

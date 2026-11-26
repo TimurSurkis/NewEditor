@@ -6,6 +6,7 @@ import type {
   PortError,
   SaveRequest,
   SaveResult,
+  ResourceEvent,
 } from '../../../ports';
 import type {
   CloseDecision,
@@ -35,9 +36,27 @@ export interface DesktopApi {
   confirmClose(displayName: string): Promise<Result<CloseDecision, PortError>>;
   onCloseRequested(listener: () => void): () => void;
   resolveClose(proceed: boolean): Promise<Result<null, PortError>>;
+  watchResource(
+    ref: StorageRef,
+    listener: (event: ResourceEvent) => void,
+    onError: (error: PortError) => void,
+  ): () => void;
+  refreshResources(): Promise<Result<null, PortError>>;
 }
+export type ResourceNotification = { readonly subscriptionId: string } & (
+  { readonly event: ResourceEvent } | { readonly error: PortError }
+);
 
 export interface DesktopIpcMap {
+  'resource:watch': {
+    readonly request: { readonly ref: StorageRef; readonly subscriptionId: string };
+    readonly response: Result<null, PortError>;
+  };
+  'resource:unwatch': {
+    readonly request: { readonly subscriptionId: string };
+    readonly response: Result<null, PortError>;
+  };
+  'resource:refresh': { readonly request: null; readonly response: Result<null, PortError> };
   'app:info': { readonly request: null; readonly response: Result<AppInfo, PortError> };
   'storage:health': { readonly request: null; readonly response: Result<StorageHealth, PortError> };
   'dialog:open': {
@@ -77,6 +96,9 @@ export interface DesktopIpcMap {
 }
 
 export const channels = {
+  watchResource: 'resource:watch',
+  unwatchResource: 'resource:unwatch',
+  refreshResources: 'resource:refresh',
   appInfo: 'app:info',
   storageHealth: 'storage:health',
   pickOpen: 'dialog:open',
@@ -91,3 +113,4 @@ export const channels = {
   resolveClose: 'window:resolve-close',
 } as const;
 export const closeRequested = 'window:close-request';
+export const resourceNotification = 'resource:notification';

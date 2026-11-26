@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,8 @@ import type { LocalOptions } from '../../src/platform/desktop/main/persistence/l
 import { createFileReader } from '../../src/platform/desktop/main/persistence/file-reader';
 import { createFileWriter } from '../../src/platform/desktop/main/persistence/file-writer';
 import { value } from '../support/storage-contract';
+import { ManualSignals } from '../helpers/watch-signals';
+import type { ResourceNotification } from '../../src/platform/desktop/shared/contracts';
 
 function gate() {
   let resolve!: () => void;
@@ -74,6 +77,150 @@ const saveDialogs = (path: string | null): FileDialogs => ({
   async confirmClose() {
     return 'cancel';
   },
+});
+
+test('watch IPC: полномочия/DTO/чужая отписка и дубликат проверяются без наблюдения чужого файла', async (t) => {
+  const signals = new ManualSignals(),
+    f = await fixture(t, { signals });
+  const ipc = createFileIpc(
+      f.client,
+      async () => [f.path],
+      undefined,
+      () => {},
+    ),
+    ref = value(await ipc.pickOpen(null))!.documents[0]!.ref,
+    id = randomUUID();
+  const foreign = createFileIpc(
+    f.services.createClient({}),
+    async () => null,
+    undefined,
+    () => {},
+  );
+  assert.equal((await foreign.watchResource({ ref, subscriptionId: randomUUID() })).ok, false);
+  assert.equal((await ipc.watchResource({ ref, subscriptionId: id, path: f.path })).ok, false);
+  assert.equal((await ipc.watchResource({ ref, subscriptionId: 'bad' })).ok, false);
+  assert.equal(signals.starts, 0);
+  value(await ipc.watchResource({ ref, subscriptionId: id }));
+  value(await ipc.refreshResources(null));
+  assert.equal((await ipc.watchResource({ ref, subscriptionId: id })).ok, false);
+  assert.equal((await foreign.unwatchResource({ subscriptionId: id })).ok, false);
+  assert.equal((await ipc.refreshResources({})).ok, false);
+  value(await ipc.unwatchResource({ subscriptionId: id }));
+  assert.equal(signals.watchers.size, 0);
+  assert.equal(signals.polls.size, 0);
+});
+
+test('watch IPC: immediate unwatch и close до ответа не оставляют watcher или событие', async (t) => {
+  const signals = new ManualSignals(),
+    f = await fixture(t, { signals }),
+    delivered: ResourceNotification[] = [];
+  const ipc = createFileIpc(
+      f.client,
+      async () => [f.path],
+      undefined,
+      (event) => delivered.push(event),
+    ),
+    ref = value(await ipc.pickOpen(null))!.documents[0]!.ref;
+  const subscriptionId = randomUUID(),
+    watching = ipc.watchResource({ ref, subscriptionId });
+  value(await ipc.unwatchResource({ subscriptionId }));
+  assert.equal((await watching).ok, false);
+  const second = ipc.watchResource({ ref, subscriptionId: randomUUID() });
+  ipc.close();
+  assert.equal((await second).ok, false);
+  assert.equal(signals.starts, 0);
+  assert.deepEqual(delivered, []);
+});
+
+test('watch IPC: changed/deleted с ID, подавление собственного save и прекращение после unwatch', async (t) => {
+  const signals = new ManualSignals(),
+    f = await fixture(t, { signals }),
+    delivered: ResourceNotification[] = [];
+  const ipc = createFileIpc(
+      f.client,
+      async () => [f.path],
+      undefined,
+      (event) => delivered.push(event),
+    ),
+    ref = value(await ipc.pickOpen(null))!.documents[0]!.ref;
+  const loaded = value(await ipc.loadDocument({ ref })),
+    subscriptionId = randomUUID();
+  value(await ipc.watchResource({ ref, subscriptionId }));
+  value(await ipc.refreshResources(null));
+  assert.equal(
+    (
+      await ipc.saveDocument({
+        ...saveInput({ ref, expectedRevision: loaded.storageRevision }),
+        documentId: loaded.documentId,
+      })
+    ).kind,
+    'saved',
+  );
+  value(await ipc.refreshResources(null));
+  assert.deepEqual(delivered, []);
+  await writeFile(f.path, 'external');
+  value(await ipc.refreshResources(null));
+  assert.deepEqual(delivered, [{ subscriptionId, event: { ref, kind: 'changed' } }]);
+  await rm(f.path);
+  value(await ipc.refreshResources(null));
+  assert.deepEqual(delivered.at(-1), { subscriptionId, event: { ref, kind: 'deleted' } });
+  value(await ipc.unwatchResource({ subscriptionId }));
+  await writeFile(f.path, 'recreated');
+  value(await ipc.refreshResources(null));
+  assert.equal(delivered.length, 2);
+});
+
+test('watch IPC: ошибка watcher доставляется с ID, polling продолжает обнаруживать изменения', async (t) => {
+  const signals = new ManualSignals(),
+    f = await fixture(t, { signals }),
+    delivered: ResourceNotification[] = [];
+  const ipc = createFileIpc(
+      f.client,
+      async () => [f.path],
+      undefined,
+      (event) => delivered.push(event),
+    ),
+    ref = value(await ipc.pickOpen(null))!.documents[0]!.ref;
+  value(await ipc.loadDocument({ ref }));
+  const subscriptionId = randomUUID();
+  value(await ipc.watchResource({ ref, subscriptionId }));
+  value(await ipc.refreshResources(null));
+  signals.fail({ code: 'io-error', message: 'watch failed', retryable: true });
+  assert.deepEqual(delivered[0], {
+    subscriptionId,
+    error: { code: 'io-error', message: 'watch failed', retryable: true },
+  });
+  await writeFile(f.path, 'new');
+  value(await ipc.refreshResources(null));
+  assert.deepEqual(delivered.at(-1), { subscriptionId, event: { ref, kind: 'changed' } });
+  ipc.close();
+  assert.equal(signals.watchers.size, 0);
+  assert.equal(signals.polls.size, 0);
+});
+
+test('watch IPC: событие может прийти до ответа; ID уже известен и close отзывает доставку', async (t) => {
+  const signals = new ManualSignals(),
+    f = await fixture(t, { signals }),
+    delivered: ResourceNotification[] = [];
+  const ipc = createFileIpc(
+      f.client,
+      async () => [f.path],
+      undefined,
+      (event) => delivered.push(event),
+    ),
+    ref = value(await ipc.pickOpen(null))!.documents[0]!.ref;
+  const watch = f.client.events.watch.bind(f.client.events);
+  f.client.events.watch = (ref, listener, error) => {
+    listener({ ref, kind: 'changed' });
+    return watch(ref, listener, error);
+  };
+  const subscriptionId = randomUUID();
+  value(await ipc.watchResource({ ref, subscriptionId }));
+  assert.deepEqual(delivered[0], { subscriptionId, event: { ref, kind: 'changed' } });
+  ipc.close();
+  await writeFile(f.path, 'late');
+  await f.client.refreshResources();
+  assert.equal(delivered.length, 1);
 });
 
 test('save IPC: отмена диалога/замены не регистрирует цель и не меняет историю/файл', async (t) => {

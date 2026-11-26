@@ -14,7 +14,7 @@ export function createRendererStorage(api: DesktopApi): StorageServices {
   return {
     id: 'local',
     assets: null,
-    events: null,
+    events: { watch: (ref, listener, onError) => api.watchResource(ref, listener, onError) },
     access: null,
     documents: {
       load: (ref, access) =>

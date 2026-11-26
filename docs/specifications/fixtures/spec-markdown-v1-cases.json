@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "status": "specified-not-executed",
+  "cases": [
+    {
+      "id": "MV-01",
+      "source": "До.\r\n\r\nНазвание\r\n========\r\n\r\nПосле.\r\n",
+      "selection": { "select": "Название" },
+      "action": { "kind": "set-heading", "level": 3 },
+      "changeScope": "Название\r\n========",
+      "outcome": "applied",
+      "expected": "До.\r\n\r\n### Название\r\n\r\nПосле.\r\n"
+    },
+    {
+      "id": "MV-02",
+      "source": "До a`b после.\n",
+      "selection": { "select": "a`b" },
+      "action": { "kind": "set-inline-code", "enabled": true },
+      "changeScope": "a`b",
+      "outcome": "applied",
+      "expected": "До ``a`b`` после.\n"
+    },
+    {
+      "id": "MV-03",
+      "source": "До [**Текст**][Ref].\n\n[Ref]: https://example.test/\n",
+      "selection": { "select": "Текст" },
+      "action": { "kind": "remove-link" },
+      "changeScope": "[**Текст**][Ref]",
+      "outcome": "applied",
+      "expected": "До **Текст**.\n\n[Ref]: https://example.test/\n"
+    },
+    {
+      "id": "MV-04",
+      "source": "[Книга][Doc] и [ещё][Doc].\n\n[Doc]: <https://old.test/> \"Old\"\n",
+      "selection": { "select": "Книга" },
+      "action": { "kind": "set-link", "url": "https://new.test/", "title": "New", "convertReference": true },
+      "changeScope": "[Книга][Doc]",
+      "outcome": "applied",
+      "expected": "[Книга](https://new.test/ \"New\") и [ещё][Doc].\n\n[Doc]: <https://old.test/> \"Old\"\n"
+    },
+    {
+      "id": "MV-05",
+      "source": "До.\n\nalphabeta\n\nПосле.\n",
+      "selection": { "caretAfter": "alpha" },
+      "action": { "kind": "split-block" },
+      "changeScope": "alphabeta",
+      "outcome": "applied",
+      "expected": "До.\n\nalpha\n\nbeta\n\nПосле.\n"
+    },
+    {
+      "id": "MV-06",
+      "source": "- [x] alphabeta\n- [ ] end\n",
+      "selection": { "caretAfter": "alpha" },
+      "action": { "kind": "split-block" },
+      "changeScope": "- [x] alphabeta",
+      "outcome": "applied",
+      "expected": "- [x] alpha\n- [ ] beta\n- [ ] end\n"
+    },
+    {
+      "id": "MV-07",
+      "source": "- Parent\n  - \n\nTail.\n",
+      "selection": { "caretAfter": "  - " },
+      "action": { "kind": "split-block" },
+      "changeScope": "- Parent\n  - ",
+      "outcome": "applied",
+      "expected": "- Parent\n- \n\nTail.\n"
+    },
+    {
+      "id": "MV-08",
+      "source": "- alpha\n- beta\n\n* tail\n",
+      "selection": { "select": "alpha\n- beta" },
+      "action": { "kind": "set-list", "style": "ordered" },
+      "changeScope": "- alpha\n- beta",
+      "outcome": "applied",
+      "expected": "1. alpha\n2. beta\n\n* tail\n"
+    },
+    {
+      "id": "MV-09",
+      "source": "- alpha\n- beta\n\nTail.\n",
+      "selection": { "select": "beta" },
+      "action": { "kind": "indent-list" },
+      "changeScope": "- alpha\n- beta",
+      "outcome": "applied",
+      "expected": "- alpha\n  - beta\n\nTail.\n"
+    },
+    {
+      "id": "MV-10",
+      "source": "Before.\n\n```js\nold\n```\n\nAfter.\n",
+      "selection": { "select": "old" },
+      "action": { "kind": "replace-text", "insert": "```\nnext" },
+      "changeScope": "```js\nold\n```",
+      "outcome": "applied",
+      "expected": "Before.\n\n````js\n```\nnext\n````\n\nAfter.\n"
+    },
+    {
+      "id": "MV-11",
+      "source": "| A | B |\n| --- | --- |\n| old | keep |\n\nTail.\n",
+      "selection": { "select": "old" },
+      "action": { "kind": "replace-text", "insert": "x|y" },
+      "changeScope": "old",
+      "outcome": "applied",
+      "expected": "| A | B |\n| --- | --- |\n| x\\|y | keep |\n\nTail.\n"
+    },
+    {
+      "id": "MV-12",
+      "source": "| A | B |\n| --- | --- |\n| one | two |\n\nTail.\n",
+      "selection": { "select": "one" },
+      "action": { "kind": "table-add-column", "side": "after" },
+      "changeScope": "| A | B |\n| --- | --- |\n| one | two |",
+      "outcome": "applied",
+      "expected": "| A |  | B |\n| --- | --- | --- |\n| one |  | two |\n\nTail.\n"
+    },
+    {
+      "id": "MV-13",
+      "source": "| A | B |\n| --- | --- |\n| one | two |\n\nTail.\n",
+      "selection": { "select": "two" },
+      "action": { "kind": "table-align", "alignment": "right" },
+      "changeScope": "| A | B |\n| --- | --- |\n| one | two |",
+      "outcome": "applied",
+      "expected": "| A | B |\n| --- | ---: |\n| one | two |\n\nTail.\n"
+    },
+    {
+      "id": "MV-14",
+      "source": "first\n\nsecond\n\nTail.\n",
+      "selection": { "select": "first\n\nsecond" },
+      "action": { "kind": "set-quote", "enabled": true },
+      "changeScope": "first\n\nsecond",
+      "outcome": "applied",
+      "expected": "> first\n> \n> second\n\nTail.\n"
+    },
+    {
+      "id": "MV-15",
+      "source": "<div>raw</div>\n\ntext\n",
+      "selection": { "select": "raw</div>\n\ntext" },
+      "action": { "kind": "set-inline", "mark": "strong", "enabled": true },
+      "changeScope": null,
+      "outcome": "rejected",
+      "errorCode": "unsupported",
+      "expected": "<div>raw</div>\n\ntext\n"
+    },
+    {
+      "id": "MV-16",
+      "source": "| A |\n| --- |\n| cell |\n",
+      "selection": { "select": "cell" },
+      "action": { "kind": "replace-text", "insert": "line1\nline2" },
+      "changeScope": null,
+      "outcome": "rejected",
+      "errorCode": "unsupported",
+      "pending": "line1\nline2",
+      "expected": "| A |\n| --- |\n| cell |\n"
+    }
+  ]
+}

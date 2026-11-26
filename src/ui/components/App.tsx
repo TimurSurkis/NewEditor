@@ -60,7 +60,12 @@ export function App({
         <button
           disabled={switching}
           onClick={async () => {
-            if (switching || workspace.getSnapshot().transitioning) return;
+            if (
+              switching ||
+              workspace.getSnapshot().transitioning ||
+              workspace.getSnapshot().ending
+            )
+              return;
             setSwitching(true);
             try {
               const id = workspace.getSnapshot().activeId;

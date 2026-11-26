@@ -19,15 +19,9 @@ export function createRendererStorage(api: DesktopApi): StorageServices {
     documents: {
       load: (ref, access) =>
         access === null ? api.loadDocument(ref) : Promise.resolve(unsupported()),
-      async save() {
-        return { kind: 'not-written', error: unsupported().error };
-      },
-      async getOperation() {
-        return unsupported();
-      },
-      async reconcile(operationId) {
-        return { kind: 'unknown', operationId, error: unsupported().error };
-      },
+      save: (request) => api.saveDocument(request),
+      getOperation: (id) => api.getOperation(id),
+      reconcile: (id) => api.reconcileOperation(id),
     },
     history: {
       async list() {

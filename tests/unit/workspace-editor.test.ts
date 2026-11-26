@@ -163,3 +163,21 @@ it('финальное закрытие блокирует редактор/ко
   expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('');
   f.editor.destroy();
 });
+
+it('кодировка/BOM меняются отменяемой metadata-only транзакцией', async () => {
+  const f = fixture();
+  value(f.type('A'));
+  const revision = f.app.getSnapshot(f.id)!.edit.document.sourceRevision;
+  await f.editor.changeMetadata(f.id, { encoding: 'windows-1251', bom: false });
+  expect(f.app.getSnapshot(f.id)?.edit.document.fileMetadata.encoding).toBe('windows-1251');
+  expect(f.app.getSnapshot(f.id)?.edit.document.sourceRevision).toBe(revision);
+  await f.editor.history(f.id);
+  expect(f.app.getSnapshot(f.id)?.edit.document.fileMetadata).toEqual({
+    encoding: 'utf-8',
+    bom: false,
+  });
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('A');
+  await f.editor.changeMetadata(f.id, { encoding: 'utf-8', bom: true });
+  expect(f.app.getSnapshot(f.id)?.edit.document.fileMetadata.bom).toBe(true);
+  f.editor.destroy();
+});

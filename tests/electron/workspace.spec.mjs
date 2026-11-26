@@ -21,6 +21,9 @@ async function fixture() {
   });
   const page = await app.firstWindow();
   await expect(page.getByRole('status')).toContainText('SQLite готова');
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 2, checkboxChecked: false });
+  });
   const choose = (paths) =>
     app.evaluate(({ dialog }, paths) => {
       dialog.showOpenDialog = async () => ({ canceled: paths === null, filePaths: paths ?? [] });
@@ -382,7 +385,7 @@ test('P5.2: dirty-ввод блокирует close/quit/reload без закр�
     await f.page.getByRole('button', { name: 'Закрыть guard.txt', exact: true }).click();
     await expect(f.page.getByRole('tab')).toHaveCount(1);
     await f.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
-    await expect(f.page.getByRole('alert').last()).toContainText('отменены');
+    await expect(f.page.getByRole('alert').last()).toContainText('отменено');
     await f.app.evaluate(({ app }) => app.quit());
     expect(await f.page.evaluate(() => window.desktop.getStorageHealth())).toMatchObject({
       ok: true,

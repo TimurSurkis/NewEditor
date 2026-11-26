@@ -1,22 +1,38 @@
 import type { DocumentFormat, Result, StorageRef } from '../core';
-import type { PortError } from '../ports';
+import type { PortError, SaveResult, SaveTarget } from '../ports';
 import type { CommandError, DocumentApplication, SessionView } from './contracts';
 
 export interface OpenDialogResult {
   readonly documents: readonly { readonly ref: StorageRef; readonly displayName: string }[];
   readonly errors: readonly { readonly displayName: string; readonly error: PortError }[];
 }
+export interface SaveDialogRequest {
+  readonly suggestedName: string;
+  readonly format: DocumentFormat;
+  readonly current: StorageRef | null;
+}
+export interface SaveDialogResult {
+  readonly target: SaveTarget;
+  readonly displayName: string;
+}
+export type CloseDecision = 'save' | 'discard' | 'cancel';
+export interface WorkspaceDialogs {
+  pickSave(input: SaveDialogRequest): Promise<Result<SaveDialogResult | null, PortError>>;
+  confirmClose(displayName: string): Promise<Result<CloseDecision, PortError>>;
+}
 export interface WorkspaceTab {
   readonly id: string;
   readonly name: string;
   readonly view: SessionView;
   readonly closing: boolean;
+  readonly saving: boolean;
 }
 export interface WorkspaceSnapshot {
   readonly tabs: readonly WorkspaceTab[];
   readonly activeId: string | null;
   readonly opening: boolean;
   readonly transitioning: boolean;
+  readonly ending: boolean;
   readonly errors: readonly string[];
 }
 export interface WorkspaceApplication {
@@ -26,6 +42,9 @@ export interface WorkspaceApplication {
   select(id: string): Promise<void>;
   open(): Promise<void>;
   close(id: string): Promise<void>;
+  closeAll(): Promise<boolean>;
+  save(id: string, saveAs?: boolean): Promise<SaveResult | null>;
+  reconcile(id: string): Promise<void>;
   clearErrors(): void;
   dispose(): void;
 }
@@ -34,12 +53,14 @@ export function createWorkspaceApplication(
   documents: DocumentApplication,
   pickOpen: () => Promise<Result<OpenDialogResult | null, PortError>>,
   beforeLeave?: (id: string) => Promise<Result<void, CommandError>>,
+  dialogs?: WorkspaceDialogs,
 ): WorkspaceApplication {
   let snapshot: WorkspaceSnapshot = Object.freeze({
     tabs: Object.freeze([]),
     activeId: null,
     opening: false,
     transitioning: false,
+    ending: false,
     errors: Object.freeze([]),
   });
   const listeners = new Set<() => void>(),
@@ -47,6 +68,9 @@ export function createWorkspaceApplication(
   let serial = 0,
     live = true,
     opening: Promise<void> | null = null;
+  const saves = new Map<string, Promise<SaveResult | null>>(),
+    selectedNames = new Map<string, string>();
+  let closingIntent: Promise<boolean> | null = null;
   const publish = (changes: Partial<WorkspaceSnapshot>) => {
     if (!live) return;
     snapshot = Object.freeze({ ...snapshot, ...changes });
@@ -103,11 +127,117 @@ export function createWorkspaceApplication(
       }),
     );
     publish({
-      tabs: Object.freeze([...snapshot.tabs, Object.freeze({ id, name, view, closing: false })]),
+      tabs: Object.freeze([
+        ...snapshot.tabs,
+        Object.freeze({ id, name, view, closing: false, saving: false }),
+      ]),
       activeId: activate ? id : snapshot.activeId,
     });
   };
-  return {
+  const updateTab = (
+    id: string,
+    changes: Partial<Pick<WorkspaceTab, 'name' | 'saving' | 'closing'>>,
+  ) =>
+    publish({
+      tabs: Object.freeze(
+        snapshot.tabs.map((tab) => (tab.id === id ? Object.freeze({ ...tab, ...changes }) : tab)),
+      ),
+    });
+  const blocked = (view: SessionView) =>
+    view.save.kind === 'unknown' || view.save.kind === 'history-pending';
+  const feedback = (id: string, result: SaveResult) => {
+    if (result.kind === 'conflict' || result.kind === 'not-written') selectedNames.delete(id);
+    if (result.kind === 'saved' || result.kind === 'history-pending') {
+      const name = selectedNames.get(id);
+      if (name) updateTab(id, { name });
+      if (result.kind === 'saved') selectedNames.delete(id);
+    }
+    if (result.kind === 'conflict')
+      issue(
+        'Цель изменилась или появилась после проверки. Файл не перезаписан; выберите другую цель через «Сохранить как…».',
+      );
+    else if (result.kind !== 'saved') issue(result.error.message);
+  };
+  const closeOne = async (id: string): Promise<boolean> => {
+    if (saves.has(id)) await saves.get(id);
+    if (beforeLeave && !(await leave(id))) return false;
+    const tab = snapshot.tabs.find((tab) => tab.id === id);
+    if (!live || !tab || tab.closing) return false;
+    if (blocked(tab.view) || tab.view.save.kind === 'saving') {
+      issue('Сначала проверьте незавершённое сохранение.');
+      return false;
+    }
+    const revision = tab.view.edit.stateRevision;
+    if (tab.view.isDirty) {
+      if (!dialogs) {
+        issue('Есть несохранённые изменения. Закрытие с выбором сохранения не подключено.');
+        return false;
+      }
+      const answer = await dialogs.confirmClose(tab.name);
+      if (!live) return false;
+      if (!answer.ok) {
+        issue(answer.error.message);
+        return false;
+      }
+      const decision = answer.value;
+      if (decision === 'cancel') {
+        issue('Закрытие отменено.');
+        return false;
+      }
+      if (beforeLeave && !(await leave(id))) return false;
+      if (decision === 'save') {
+        const result = await workspace.save(id);
+        if (!result || result.kind !== 'saved') return false;
+        if (beforeLeave && !(await leave(id))) return false;
+        if (documents.getSnapshot(id)?.isDirty) {
+          issue('После снимка сохранения появились новые правки; вкладка оставлена открытой.');
+          return false;
+        }
+      } else if (documents.getSnapshot(id)?.edit.stateRevision !== revision) {
+        issue(
+          'Во время диалога появились новые правки; прежнее разрешение отбросить текст отменено.',
+        );
+        return false;
+      }
+    }
+    const current = documents.getSnapshot(id);
+    if (!current) return false;
+    const expected = current.edit.stateRevision;
+    updateTab(id, { closing: true });
+    try {
+      const checked = documents.getSnapshot(id);
+      if (!checked || checked.edit.stateRevision !== expected || blocked(checked)) {
+        issue('Состояние изменилось перед закрытием.');
+        return false;
+      }
+      const closed = await documents.close(id, 'discard');
+      if (!live) return false;
+      if (!closed.ok) {
+        issue(closed.error.message);
+        return false;
+      }
+      if (!closed.value.closed) return false;
+      stops.get(id)?.();
+      stops.delete(id);
+      selectedNames.delete(id);
+      const index = snapshot.tabs.findIndex((tab) => tab.id === id),
+        tabs = snapshot.tabs.filter((tab) => tab.id !== id);
+      publish({
+        tabs: Object.freeze(tabs),
+        activeId:
+          snapshot.activeId === id
+            ? (tabs[index]?.id ?? tabs[index - 1]?.id ?? null)
+            : snapshot.activeId,
+      });
+      return true;
+    } catch {
+      issue('Не удалось закрыть документ');
+      return false;
+    } finally {
+      if (live && snapshot.tabs.some((tab) => tab.id === id)) updateTab(id, { closing: false });
+    }
+  };
+  const workspace: WorkspaceApplication = {
     getSnapshot: () => snapshot,
     subscribe(listener) {
       if (live) listeners.add(listener);
@@ -116,11 +246,13 @@ export function createWorkspaceApplication(
       };
     },
     async create(format) {
+      if (snapshot.ending) return;
       if (beforeLeave && !(await leave(snapshot.activeId))) return;
       if (live)
         add(documents.create(format), `Без имени ${++serial}.${format === 'txt' ? 'txt' : 'md'}`);
     },
     async select(id) {
+      if (snapshot.ending) return;
       if (snapshot.activeId === id) return;
       if (beforeLeave && !(await leave(snapshot.activeId))) return;
       if (
@@ -131,7 +263,7 @@ export function createWorkspaceApplication(
         publish({ activeId: id });
     },
     open() {
-      if (!live) return Promise.resolve();
+      if (!live || snapshot.ending) return Promise.resolve();
       if (opening) return opening;
       opening = Promise.resolve().then(async () => {
         try {
@@ -169,57 +301,94 @@ export function createWorkspaceApplication(
       return opening;
     },
     async close(id) {
-      if (beforeLeave && !(await leave(id))) return;
-      const tab = snapshot.tabs.find((tab) => tab.id === id);
-      if (!live || !tab || tab.closing) return;
-      if (tab.view.isDirty) {
-        issue(
-          'Есть несохранённые изменения. Закрытие с выбором сохранения появится на этапе P5.3.',
-        );
-        return;
-      }
-      publish({
-        tabs: Object.freeze(
-          snapshot.tabs.map((tab) =>
-            tab.id === id ? Object.freeze({ ...tab, closing: true }) : tab,
-          ),
-        ),
-      });
-      try {
-        if (documents.getSnapshot(id)?.isDirty) {
-          issue('Появились несохранённые изменения; вкладка оставлена открытой.');
-          return;
-        }
-        const closed = await documents.close(id, 'discard');
-        if (!live) return;
-        if (!closed.ok) {
-          issue(closed.error.message);
-          return;
-        }
-        if (!closed.value.closed) return;
-        stops.get(id)?.();
-        stops.delete(id);
-        const index = snapshot.tabs.findIndex((tab) => tab.id === id),
-          tabs = snapshot.tabs.filter((tab) => tab.id !== id);
-        publish({
-          tabs: Object.freeze(tabs),
-          activeId:
-            snapshot.activeId === id
-              ? (tabs[index]?.id ?? tabs[index - 1]?.id ?? null)
-              : snapshot.activeId,
+      if (!live || snapshot.ending || closingIntent) return;
+      closingIntent = Promise.resolve()
+        .then(() => closeOne(id))
+        .catch(() => {
+          issue('Не удалось подтвердить закрытие');
+          return false;
         });
-      } catch {
-        issue('Не удалось закрыть документ');
+      try {
+        await closingIntent;
       } finally {
-        if (live && snapshot.tabs.some((tab) => tab.id === id))
-          publish({
-            tabs: Object.freeze(
-              snapshot.tabs.map((tab) =>
-                tab.id === id ? Object.freeze({ ...tab, closing: false }) : tab,
-              ),
-            ),
-          });
+        closingIntent = null;
       }
+    },
+    async closeAll() {
+      if (!live || snapshot.ending) return false;
+      if (closingIntent && !(await closingIntent)) return false;
+      publish({ ending: true });
+      try {
+        await opening;
+        await Promise.all([...saves.values()]);
+        for (const tab of [...snapshot.tabs]) if (!(await closeOne(tab.id))) return false;
+        return live && snapshot.tabs.length === 0;
+      } catch {
+        issue('Не удалось подготовить закрытие окна');
+        return false;
+      } finally {
+        publish({ ending: false });
+      }
+    },
+    save(id, saveAs = false) {
+      const existing = saves.get(id);
+      if (existing) return existing;
+      if (!live) return Promise.resolve(null);
+      const task = Promise.resolve().then(async (): Promise<SaveResult | null> => {
+        try {
+          const tab = snapshot.tabs.find((tab) => tab.id === id);
+          if (!tab || tab.closing) return null;
+          publish({ errors: Object.freeze([]) });
+          if (blocked(tab.view)) {
+            issue('Сначала проверьте незавершённое сохранение.');
+            return null;
+          }
+          if (beforeLeave && !(await leave(id))) return null;
+          const view = documents.getSnapshot(id);
+          if (!view) return null;
+          let chosen: SaveDialogResult | null = null;
+          if (saveAs || !view.edit.document.location) {
+            if (!dialogs) {
+              issue('Диалог сохранения не подключён');
+              return null;
+            }
+            const result = await dialogs.pickSave({
+              suggestedName: tab.name,
+              format: view.edit.document.format,
+              current: view.edit.document.location,
+            });
+            if (!live) return null;
+            if (!result.ok) {
+              issue(result.error.message);
+              return null;
+            }
+            if (result.value === null) return null;
+            chosen = result.value;
+            if (beforeLeave && !(await leave(id))) return null;
+            if (!documents.getSnapshot(id)) return null;
+            selectedNames.set(id, chosen.displayName);
+          }
+          const result = await documents.save(id, chosen?.target);
+          if (live) feedback(id, result);
+          return result;
+        } catch {
+          issue('Не удалось подготовить сохранение');
+          return null;
+        } finally {
+          saves.delete(id);
+          updateTab(id, { saving: false });
+        }
+      });
+      saves.set(id, task);
+      updateTab(id, { saving: true });
+      return task;
+    },
+    async reconcile(id) {
+      if (!live || saves.has(id)) return;
+      publish({ errors: Object.freeze([]) });
+      if (beforeLeave && !(await leave(id))) return;
+      const result = await documents.reconcileSave(id);
+      if (live) feedback(id, result);
     },
     clearErrors() {
       if (snapshot.errors.length) publish({ errors: Object.freeze([]) });
@@ -231,4 +400,5 @@ export function createWorkspaceApplication(
       listeners.clear();
     },
   };
+  return workspace;
 }

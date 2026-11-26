@@ -68,9 +68,7 @@ export function SourcePanel({
         </button>
         {state.composing && <span role="status">Композиция: завершите ввод для перехода</span>}
       </div>
-      <p className="source-warning">
-        Изменения только в памяти. Сохранение появится на следующем этапе P5.3.
-      </p>
+      <p className="source-warning">Исходный файл меняется только по команде «Сохранить».</p>
       {state.searchOpen && (
         <section className="source-search" aria-label="Поиск и замена">
           <label>

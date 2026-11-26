@@ -23,6 +23,10 @@ const workspace = createWorkspaceApplication(
   documents,
   () => window.desktop.pickOpen(),
   (id) => editor.flush(id),
+  {
+    pickSave: (input) => window.desktop.pickSave(input),
+    confirmClose: (displayName) => window.desktop.confirmClose(displayName),
+  },
 );
 const synchronize = () => {
   const state = workspace.getSnapshot();
@@ -34,15 +38,43 @@ const synchronize = () => {
 };
 const stop = workspace.subscribe(synchronize);
 synchronize();
+let resolvingClose = false;
+const stopClose = window.desktop.onCloseRequested(() => {
+  if (resolvingClose) return;
+  resolvingClose = true;
+  void workspace
+    .closeAll()
+    .then(async (proceed) => {
+      await window.desktop.resolveClose(
+        proceed && !editor.hasPending() && workspace.getSnapshot().tabs.length === 0,
+      );
+    })
+    .catch(async () => {
+      await window.desktop.resolveClose(false);
+    })
+    .finally(() => {
+      resolvingClose = false;
+    });
+});
 const beforeUnload = (event: BeforeUnloadEvent) => {
   const state = workspace.getSnapshot();
-  if (!editor.hasPending() && !state.tabs.some((tab) => tab.view.isDirty)) return;
+  if (
+    !editor.hasPending() &&
+    !state.ending &&
+    !state.tabs.some(
+      (tab) =>
+        tab.view.isDirty ||
+        tab.saving ||
+        ['saving', 'unknown', 'history-pending'].includes(tab.view.save.kind),
+    )
+  )
+    return;
   event.preventDefault();
   event.returnValue = '';
   if (state.activeId)
     editor.report(
       state.activeId,
-      'Закрытие или перезагрузка отменены: есть несохранённый или неподтверждённый ввод. Сохранение появится в P5.3.',
+      'Перезагрузка отменена: есть несохранённый ввод или незавершённая запись. Сначала сохраните или закройте вкладки.',
     );
 };
 window.addEventListener('beforeunload', beforeUnload);
@@ -50,6 +82,7 @@ if (import.meta.hot)
   import.meta.hot.dispose(() => {
     window.removeEventListener('beforeunload', beforeUnload);
     stop();
+    stopClose();
     editor.destroy();
     workspace.dispose();
   });

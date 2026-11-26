@@ -1,6 +1,6 @@
 import { findTextMatches, replacementChanges } from '../../application';
 import type { CommandError, DocumentApplication, TextMatch } from '../../application';
-import type { Result, SourceSelection } from '../../core';
+import type { FileMetadata, Result, SourceSelection } from '../../core';
 import type { EditorFactory, EditorFrame, EditorHost, EditorInstance } from './contracts';
 import { sourceEditor } from './source-editor';
 import { boundedSelection, edit } from './transaction';
@@ -294,6 +294,24 @@ export class WorkspaceEditor {
   history(id: string, redo = false): Promise<void> {
     return this.run(id, (entry) => {
       const result = this.command(entry, () => (redo ? this.app.redo(id) : this.app.undo(id)));
+      if (result.ok) entry.instance?.render(result.value);
+      else this.report(id, result.error.message);
+    });
+  }
+  changeMetadata(id: string, metadata: FileMetadata): Promise<void> {
+    const value = { encoding: metadata.encoding, bom: metadata.bom };
+    return this.run(id, (entry) => {
+      const frame = this.frame(entry);
+      const result = this.command(entry, () =>
+        this.app.apply(id, {
+          documentId: frame.state.document.id,
+          baseStateRevision: frame.state.stateRevision,
+          body: { changes: [], fileMetadata: value },
+          selectionBefore: frame.selection,
+          selectionAfter: frame.selection,
+          groupId: null,
+        }),
+      );
       if (result.ok) entry.instance?.render(result.value);
       else this.report(id, result.error.message);
     });

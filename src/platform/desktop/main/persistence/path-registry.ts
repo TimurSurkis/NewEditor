@@ -71,12 +71,10 @@ async function canonicalize(
   return { ok: true, value: { path: canonical, format, stat } };
 }
 
-export async function registerLocalPath(
-  repository: LocalRepository,
+export async function resolveLocalPath(
   path: string,
   purpose: RegistrationPurpose,
-  isActive: () => boolean,
-): Promise<Result<ResourceRecord, PortError>> {
+): Promise<Result<CanonicalPath, PortError>> {
   if (
     typeof path !== 'string' ||
     !path ||
@@ -85,12 +83,20 @@ export async function registerLocalPath(
     !['open', 'save-target'].includes(purpose)
   )
     return localFailure('invalid-input', 'Некорректный абсолютный путь или назначение регистрации');
-  let resolved: Awaited<ReturnType<typeof canonicalize>>;
   try {
-    resolved = await canonicalize(path, purpose);
+    return await canonicalize(path, purpose);
   } catch (error) {
     return fileFailure(error);
   }
+}
+
+export async function registerLocalPath(
+  repository: LocalRepository,
+  path: string,
+  purpose: RegistrationPurpose,
+  isActive: () => boolean,
+): Promise<Result<ResourceRecord, PortError>> {
+  const resolved = await resolveLocalPath(path, purpose);
   if (!resolved.ok) return resolved;
   const target = resolved.value;
   let found = repository.findPath(target.path);

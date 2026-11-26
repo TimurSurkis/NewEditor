@@ -1,12 +1,12 @@
 # Контракты модулей и локального транспорта
 
-Статус: **контракты P0.2 зафиксированы для P1–P4**.
-Редакция: 2026-11-25.
+Статус: **контракты P0.2 зафиксированы и уточнены по P5.3**.
+Редакция: 2026-11-26.
 Основание: [архитектура](spec-architecture.md), [модель документа](spec-document-model.md). Детали локального адаптера: [сохранение P4](spec-local-persistence.md).
 
 Ниже описаны публичные границы. В P2 реализованы ядро и сценарии приложения, добавлен тестовый адаптер хранения; реальные файловые операции и основной IPC относятся к P4–P7. Порты используют обычные данные и Promise; реализации подключаются в точке запуска. Результаты: [отчёт P2](../trackers/track-document-core.md).
 
-Результат P4.2–P4.4: main-only фабрика реализует полный DocumentStore с журналом и HistoryStore с реестром/правами владельца. Черновики, наблюдение и файловый IPC/UI ещё не подключены; подробности — в спецификации локального хранения.
+Результат P4: main-only фабрика реализует DocumentStore с журналом, историю, черновики и наблюдение с правами владельца. P5.1–P5.3 подключают открытие/редактирование/сохранение и закрытие через IPC/UI; ресурсные подписки renderer относятся к P5.4, интерфейс истории/восстановления — к P7.
 
 ## 1. Владение контрактами
 
@@ -228,7 +228,8 @@ export interface DesktopDialogs {
     readonly suggestedName: string;
     readonly format: DocumentFormat;
     readonly current: StorageRef | null;
-  }): Promise<Result<SaveTarget | null, PortError>>;
+  }): Promise<Result<{ readonly target: SaveTarget; readonly displayName: string } | null, PortError>>;
+  confirmClose(displayName: string): Promise<Result<'save' | 'discard' | 'cancel', PortError>>;
 }
 
 export interface IpcEntry<Request, Response> {
@@ -241,6 +242,9 @@ export interface DesktopIpcMap {
   'storage:health': IpcEntry<null, Result<{ readonly schemaVersion: number }, PortError>>;
   'dialog:open': IpcEntry<null, Awaited<ReturnType<DesktopDialogs['pickOpen']>>>;
   'dialog:save': IpcEntry<Parameters<DesktopDialogs['pickSave']>[0], Awaited<ReturnType<DesktopDialogs['pickSave']>>>;
+  'dialog:close': IpcEntry<{ readonly displayName: string }, Awaited<ReturnType<DesktopDialogs['confirmClose']>>>;
+  'window:ready': IpcEntry<null, Result<null, PortError>>;
+  'window:resolve-close': IpcEntry<{ readonly proceed: boolean }, Result<null, PortError>>;
   'document:load': IpcEntry<{ readonly ref: StorageRef }, Result<LoadedDocument, PortError>>;
   'document:save': IpcEntry<SaveRequest, SaveResult>;
   'operation:get': IpcEntry<{ readonly operationId: OperationId }, Result<OperationStatus, PortError>>;
@@ -257,6 +261,7 @@ export interface DesktopIpcMap {
 }
 
 export interface DesktopEventMap {
+  'window:close-request': null;
   'resource:changed': { readonly subscriptionId: string; readonly event: ResourceEvent };
   'app:open-files': { readonly refs: readonly StorageRef[] };
 }
@@ -315,7 +320,7 @@ export interface DesktopEventMap {
 
 P1 реализует `app:info` и `storage:health` для запуска и проверки нативной SQLite. Остальные обработчики вводятся вместе с модулями P4–P7. Диагностические операции возвращают сведения приложения/схемы, а не принимают произвольный SQL.
 
-P5.1 подключает `dialog:open`, `document:load` и `draft:remove` по [спецификации UI](spec-desktop-ui.md). Диалог возвращает непрозрачные ref/имена и отдельные ошибки пачки; полные пути не передаются. Остальные файловые каналы таблицы пока не экспортированы. Renderer-адаптер для них возвращает явный unsupported, не имитирует успешную запись. Main отзывает клиента при закрытии/новой загрузке renderer и дожидается начатых запросов перед закрытием SQLite.
+P5.1 подключает `dialog:open`, `document:load` и `draft:remove` по [спецификации UI](spec-desktop-ui.md). Диалог возвращает непрозрачные ref/имена и отдельные ошибки пачки; полные пути не передаются. P5.3 добавляет `dialog:save`, `document:save`, `operation:get`, `operation:reconcile`, `dialog:close` и handshake окна `window:ready` / `window:close-request` / `window:resolve-close`. Выбор Save As фиксирует ревизию до подтверждения замены и возвращает basename/target, не путь. Ошибки save возвращаются как not-written при известном отказе до записи; потеря ответа — unknown. Отказ reconcile также unknown, не Result. Renderer-адаптер для ещё не подключённых history/draft-put/list/events возвращает unsupported или null, не имитирует успех. Main отзывает клиента после фактического закрытия/новой загрузки renderer, дожидается принятых IPC перед закрытием SQLite; отменённое закрытие оставляет сервис доступным.
 
 Preload предоставляет фиксированные методы, соответствующие таблице каналов; renderer не получает универсальный `send(channel, payload)`. Каждый аргумент проходит runtime-проверку в main: строки ID, целые ревизии, структура снимка и разрешённые ссылки на ресурсы. TypeScript не заменяет проверку входных данных.
 

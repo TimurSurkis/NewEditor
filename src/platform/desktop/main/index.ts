@@ -3,7 +3,7 @@ import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type { PortError } from '../../../ports';
-import { channels } from '../shared/contracts';
+import { channels, closeRequested } from '../shared/contracts';
 import type { DesktopIpcMap } from '../shared/contracts';
 import { openServiceDatabase } from './database';
 import type { ServiceDatabase } from './database';
@@ -11,7 +11,8 @@ import { rendererUrl, validateRequestSource } from './security';
 import { prepareServiceProfile } from './service-files';
 import { createLocalServices } from './persistence/local-services';
 import type { LocalServices } from './persistence/local-services';
-import { createFileIpc } from './file-ipc';
+import { createFileIpc, fileIpcFailure } from './file-ipc';
+import { fields } from './persistence/save-data';
 
 app.setName('NewEditor');
 const profile = process.env['NEWEDITOR_USER_DATA'];
@@ -73,25 +74,85 @@ async function createWindow(): Promise<void> {
     },
   });
   window = next;
+  let rendererReady = false,
+    closeWaiting = false,
+    closeApproved = false;
   const resetClient = () => {
     fileIpc?.close();
     fileIpc = localServices
-      ? createFileIpc(localServices.createClient(next.webContents), async () => {
-          const selected = await dialog.showOpenDialog(next, {
-            title: 'Открыть документы',
-            properties: ['openFile', 'multiSelections'],
-            filters: [{ name: 'Текст и Markdown', extensions: ['txt', 'md', 'markdown'] }],
-          });
-          return selected.canceled ? null : selected.filePaths;
-        })
+      ? createFileIpc(
+          localServices.createClient(next.webContents),
+          async () => {
+            const selected = await dialog.showOpenDialog(next, {
+              title: 'Открыть документы',
+              properties: ['openFile', 'multiSelections'],
+              filters: [{ name: 'Текст и Markdown', extensions: ['txt', 'md', 'markdown'] }],
+            });
+            return selected.canceled ? null : selected.filePaths;
+          },
+          {
+            async pickSave(input) {
+              const selected = await dialog.showSaveDialog(next, {
+                title: 'Сохранить как',
+                defaultPath: input.currentPath ?? input.suggestedName,
+                filters: [
+                  {
+                    name: input.format === 'txt' ? 'Текст' : 'Markdown',
+                    extensions: input.format === 'txt' ? ['txt'] : ['md', 'markdown'],
+                  },
+                ],
+                properties: ['dontAddToRecent'],
+              });
+              return selected.canceled ? null : (selected.filePath ?? null);
+            },
+            async confirmOverwrite(displayName) {
+              const result = await dialog.showMessageBox(next, {
+                type: 'warning',
+                message: `Заменить файл «${displayName}»?`,
+                detail:
+                  'Существующее содержимое будет сохранено в истории. Если файл изменится после подтверждения, запись будет отклонена.',
+                buttons: ['Заменить', 'Отмена'],
+                defaultId: 1,
+                cancelId: 1,
+                noLink: true,
+              });
+              return result.response === 0;
+            },
+            async confirmClose(displayName) {
+              const result = await dialog.showMessageBox(next, {
+                type: 'question',
+                message: `Сохранить изменения в «${displayName}»?`,
+                buttons: ['Сохранить', 'Не сохранять', 'Отмена'],
+                defaultId: 0,
+                cancelId: 2,
+                noLink: true,
+              });
+              return result.response === 0 ? 'save' : result.response === 1 ? 'discard' : 'cancel';
+            },
+          },
+        )
       : null;
   };
   resetClient();
   next.webContents.on('did-navigate', () => {
+    rendererReady = false;
+    closeWaiting = false;
+    closeApproved = false;
     if (!quitting) resetClient();
   });
   next.webContents.on('will-prevent-unload', () => {
     exitRequested = false;
+  });
+  next.on('close', (event) => {
+    if (closeApproved || !rendererReady) {
+      closeApproved = false;
+      return;
+    }
+    event.preventDefault();
+    if (!closeWaiting) {
+      closeWaiting = true;
+      next.webContents.send(closeRequested);
+    }
   });
   next.setMenuBarVisibility(false);
   next.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -120,24 +181,27 @@ async function createWindow(): Promise<void> {
         event.senderFrame?.url,
         url,
       );
-      if (error) return { ok: false, error };
+      if (error) return fileIpcFailure(channel, error, args[0]);
       if (quitting)
-        return {
-          ok: false,
-          error: { code: 'permission-denied', message: 'Приложение закрывается', retryable: false },
-        };
+        return fileIpcFailure(
+          channel,
+          { code: 'permission-denied', message: 'Приложение закрывается', retryable: false },
+          args[0],
+        );
       if (args.length !== 1)
-        return {
-          ok: false,
-          error: { code: 'invalid-input', message: 'Ожидается один запрос', retryable: false },
-        };
+        return fileIpcFailure(
+          channel,
+          { code: 'invalid-input', message: 'Ожидается один запрос', retryable: false },
+          args[0],
+        );
       const files = fileIpc;
       const task = (async (): Promise<DesktopIpcMap[typeof channel]['response']> => {
         const input = args[0];
         if (
           channel === channels.appInfo ||
           channel === channels.storageHealth ||
-          channel === channels.pickOpen
+          channel === channels.pickOpen ||
+          channel === channels.windowReady
         ) {
           if (input !== null)
             return {
@@ -151,6 +215,36 @@ async function createWindow(): Promise<void> {
         }
         if (channel === channels.appInfo)
           return { ok: true, value: { appVersion: app.getVersion() } };
+        if (channel === channels.windowReady) {
+          rendererReady = true;
+          return { ok: true, value: null };
+        }
+        if (channel === channels.resolveClose) {
+          try {
+            const data = fields(input, ['proceed']);
+            if (typeof data['proceed'] !== 'boolean') throw new Error('proceed');
+            if (!closeWaiting)
+              return {
+                ok: false,
+                error: { code: 'invalid-input', message: 'Нет запроса закрытия', retryable: false },
+              };
+            closeWaiting = false;
+            if (data['proceed']) {
+              closeApproved = true;
+              next.close();
+            } else exitRequested = false;
+            return { ok: true, value: null };
+          } catch {
+            return {
+              ok: false,
+              error: {
+                code: 'invalid-input',
+                message: 'Некорректное подтверждение закрытия',
+                retryable: false,
+              },
+            };
+          }
+        }
         if (channel === channels.storageHealth) {
           if (!database || !localServices) return unavailable();
           const ready = await localServices.ready;
@@ -164,9 +258,14 @@ async function createWindow(): Promise<void> {
             };
           }
         }
-        if (!files) return unavailable();
+        if (!files) return fileIpcFailure(channel, unavailable().error, input);
         if (channel === channels.pickOpen) return files.pickOpen(input);
         if (channel === channels.loadDocument) return files.loadDocument(input);
+        if (channel === channels.pickSave) return files.pickSave(input);
+        if (channel === channels.saveDocument) return files.saveDocument(input);
+        if (channel === channels.getOperation) return files.getOperation(input);
+        if (channel === channels.reconcileOperation) return files.reconcileOperation(input);
+        if (channel === channels.confirmClose) return files.confirmClose(input);
         return files.removeDraft(input);
       })();
       pending.add(task);

@@ -29,6 +29,7 @@ import type { WatchSignals } from './resource-observer';
 
 export interface LocalClient extends StorageServices {
   registerPath(path: string, purpose: RegistrationPurpose): Promise<Result<StorageRef, PortError>>;
+  describeResource(ref: StorageRef): Promise<Result<{ readonly path: string }, PortError>>;
   readonly events: ResourceEvents;
   recoverDraft(key: DraftKey): Promise<Result<void, PortError>>;
   refreshResources(): Promise<void>;
@@ -248,6 +249,12 @@ export function createLocalServices(
         }
       }
       const client: LocalClient = {
+        describeResource(ref) {
+          return withResource(ref, (record) => ({
+            ok: true,
+            value: { path: record.canonicalPath },
+          }));
+        },
         id: 'local',
         assets: null,
         access: null,

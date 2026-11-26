@@ -8,4 +8,8 @@ export type {
   WorkspaceApplication,
   WorkspaceSnapshot,
   WorkspaceTab,
+  SaveDialogRequest,
+  SaveDialogResult,
+  CloseDecision,
+  WorkspaceDialogs,
 } from './workspace';

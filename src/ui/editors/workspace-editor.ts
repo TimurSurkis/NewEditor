@@ -1,11 +1,28 @@
 import { findTextMatches, replacementChanges } from '../../application';
 import type { CommandError, DocumentApplication, TextMatch } from '../../application';
 import type { FileMetadata, Result, SourceSelection } from '../../core';
-import type { EditorFactory, EditorFrame, EditorHost, EditorInstance } from './contracts';
+import {
+  markdownStyleState,
+  markdownVisibleSelection,
+  parseMarkdown,
+  planBasicMarkdown,
+} from '../../formats';
+import type { BasicMarkdownAction, InlineStyle, ParsedMarkdown } from '../../formats';
+import type {
+  EditorFactory,
+  EditorFrame,
+  EditorHost,
+  EditorInstance,
+  EditorMode,
+} from './contracts';
 import { sourceEditor } from './source-editor';
+import { visualEditor } from './visual-editor';
 import { boundedSelection, edit } from './transaction';
 
 export interface SourceView {
+  readonly markdown: boolean;
+  readonly mode: EditorMode;
+  readonly inline: Readonly<Record<InlineStyle, boolean | 'mixed' | undefined>>;
   readonly editable: boolean;
   readonly selection: SourceSelection;
   readonly composing: boolean;
@@ -22,6 +39,14 @@ export interface SourceView {
   readonly canRedo: boolean;
 }
 const empty: SourceView = Object.freeze({
+  markdown: false,
+  mode: 'source',
+  inline: Object.freeze({
+    strong: undefined,
+    emphasis: undefined,
+    strike: undefined,
+    code: undefined,
+  }),
   editable: true,
   selection: { anchor: 0, head: 0 },
   composing: false,
@@ -51,6 +76,7 @@ interface Entry {
   view: SourceView;
   cached: string | null;
   matches: readonly TextMatch[];
+  parsed: ParsedMarkdown | null;
 }
 
 export class WorkspaceEditor {
@@ -61,6 +87,7 @@ export class WorkspaceEditor {
   constructor(
     private readonly app: DocumentApplication,
     private readonly factory: EditorFactory = sourceEditor,
+    private readonly visualFactory: EditorFactory = visualEditor,
   ) {}
   private entry(id: string): Entry | undefined {
     let entry = this.entries.get(id);
@@ -75,6 +102,7 @@ export class WorkspaceEditor {
         view: empty,
         cached: null,
         matches: [],
+        parsed: null,
       };
       this.entries.set(id, entry);
       const current = entry;
@@ -115,11 +143,22 @@ export class WorkspaceEditor {
       editable: !this.locked.has(entry.id),
       canUndo: view.canUndo,
       canRedo: view.canRedo,
+      ...(entry.view.mode === 'visual' ? { markdown: this.parse(entry) } : {}),
     };
+  }
+  private parse(entry: Entry): ParsedMarkdown {
+    const document = this.app.getSnapshot(entry.id)!.edit.document;
+    if (
+      entry.parsed?.sourceRevision !== document.sourceRevision ||
+      entry.parsed.text !== document.text
+    )
+      entry.parsed = parseMarkdown(document.text, document.sourceRevision);
+    return entry.parsed;
   }
   private refresh(entry: Entry, render = true): void {
     const session = this.app.getSnapshot(entry.id);
     if (!session || this.entries.get(entry.id) !== entry) return;
+    if (entry.view.mode === 'visual') this.parse(entry);
     const cache = JSON.stringify([
       session.edit.document.sourceRevision,
       entry.view.query,
@@ -138,6 +177,18 @@ export class WorkspaceEditor {
       to = Math.max(selection.anchor, selection.head);
     entry.view = Object.freeze({
       ...entry.view,
+      markdown: session.edit.document.format === 'markdown',
+      inline: Object.freeze(
+        Object.fromEntries(
+          (['strong', 'emphasis', 'strike', 'code'] as const).map((style) => [
+            style,
+            entry.parsed?.sourceRevision === session.edit.document.sourceRevision &&
+            entry.parsed.text === session.edit.document.text
+              ? markdownStyleState(entry.parsed, selection, style)
+              : undefined,
+          ]),
+        ) as Record<InlineStyle, boolean | 'mixed' | undefined>,
+      ),
       editable: !this.locked.has(entry.id),
       selection,
       canUndo: session.canUndo,
@@ -195,7 +246,8 @@ export class WorkspaceEditor {
       requestSource: (selection) => {
         this.app.setSelection(entry.id, selection);
         entry.view = { ...entry.view, selection };
-        this.refresh(entry);
+        this.refresh(entry, false);
+        void this.switchMode(entry.id, 'source');
       },
     };
   }
@@ -204,7 +256,72 @@ export class WorkspaceEditor {
     if (!entry) return;
     this.detach(id);
     entry.element = element;
-    entry.instance = this.factory.mount(element, this.host(entry), this.frame(entry));
+    entry.instance = (entry.view.mode === 'visual' ? this.visualFactory : this.factory).mount(
+      element,
+      this.host(entry),
+      this.frame(entry),
+    );
+  }
+  private setMode(entry: Entry, mode: EditorMode): void {
+    if (entry.view.mode === mode || !entry.view.markdown) return;
+    if (mode === 'visual') this.parse(entry); // Подготовка до уничтожения старого движка.
+    const element = entry.element;
+    entry.instance?.destroy();
+    entry.instance = null;
+    entry.view = { ...entry.view, mode };
+    try {
+      if (element)
+        entry.instance = (mode === 'visual' ? this.visualFactory : this.factory).mount(
+          element,
+          this.host(entry),
+          this.frame(entry),
+        );
+    } catch {
+      entry.view = {
+        ...entry.view,
+        mode: 'source',
+        error: 'Не удалось подготовить визуальный режим; исходник сохранён',
+      };
+      if (element)
+        entry.instance = this.factory.mount(element, this.host(entry), this.frame(entry));
+    }
+    this.refresh(entry, false);
+  }
+  switchMode(id: string, mode: EditorMode): Promise<void> {
+    return this.run(id, (entry) => {
+      this.setMode(entry, mode);
+      entry.instance?.focus();
+    });
+  }
+  format(
+    id: string,
+    action: BasicMarkdownAction | { readonly kind: 'toggle-inline'; readonly style: InlineStyle },
+  ): Promise<void> {
+    const requested = { ...action };
+    return this.run(id, (entry) => {
+      if (!entry.view.markdown) return;
+      const parsed = this.parse(entry),
+        frame = this.frame(entry);
+      const chosen: BasicMarkdownAction =
+        requested.kind === 'toggle-inline'
+          ? {
+              kind: 'inline',
+              style: requested.style,
+              enabled: markdownStyleState(parsed, frame.selection, requested.style) !== true,
+            }
+          : requested;
+      const plan = planBasicMarkdown(parsed, frame.selection, chosen);
+      if (!plan.ok) {
+        this.report(id, plan.error.message);
+        return;
+      }
+      const tx = edit(frame, plan.value.body.changes, plan.value.selection);
+      const result = tx.ok ? this.command(entry, () => this.app.apply(id, tx.value)) : tx;
+      if (result.ok) {
+        entry.instance?.render(result.value);
+        entry.instance?.focus();
+      } else this.report(id, result.error.message);
+    });
   }
   detach(id: string): void {
     const entry = this.entries.get(id);
@@ -284,6 +401,8 @@ export class WorkspaceEditor {
       )
         return;
       action(entry);
+    } catch {
+      this.report(id, 'Не удалось выполнить команду редактора; исходный текст сохранён');
     } finally {
       if (this.entries.get(id) === entry) {
         entry.view = { ...entry.view, busy: false };
@@ -322,6 +441,8 @@ export class WorkspaceEditor {
     );
   }
   private select(entry: Entry, selection: SourceSelection): void {
+    if (entry.view.mode === 'visual' && !markdownVisibleSelection(this.parse(entry), selection))
+      this.setMode(entry, 'source');
     this.app.setSelection(entry.id, selection);
     entry.view = { ...entry.view, selection };
     this.refresh(entry);
@@ -350,6 +471,7 @@ export class WorkspaceEditor {
   }
   replace(id: string, all = false): Promise<void> {
     return this.run(id, (entry) => {
+      this.setMode(entry, 'source');
       const selected = entry.view.current - 1;
       if (!all && selected < 0) {
         this.next(entry, false);

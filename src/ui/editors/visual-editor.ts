@@ -39,6 +39,14 @@ class VisualEditor implements EditorInstance {
         'aria-multiline': 'true',
       },
       editable: () => this.frame.editable,
+      handlePaste: (_view, event) => {
+        this.transferText(event.clipboardData);
+        return true;
+      },
+      handleDrop: (_view, event) => {
+        this.transferText(event.dataTransfer);
+        return true;
+      },
       handleTextInput: (_view, from, to, text) => {
         if (this.composition.active || this.composition.error) return false;
         this.replace(from, to, text);
@@ -195,6 +203,50 @@ class VisualEditor implements EditorInstance {
       },
     });
     this.render(initial);
+  }
+  private transferText(data: DataTransfer | null): void {
+    if (!this.frame.editable || this.composition.active || this.composition.error) return;
+    if (data?.files.length) {
+      this.host.reportError(
+        {
+          code: 'unsupported',
+          message: 'Вставка файлов/изображений подключается на этапе P6.3',
+          retryable: false,
+        },
+        null,
+      );
+      return;
+    }
+    if (!data?.types.includes('text/plain')) {
+      this.host.reportError(
+        {
+          code: 'unsupported',
+          message: 'HTML не вставляется без безопасного текстового представления',
+          retryable: false,
+        },
+        null,
+      );
+      return;
+    }
+    const text = data.getData('text/plain');
+    if (!text) return;
+    const selection = this.view.state.selection;
+    const code = this.projection.spans.some(
+      (span) =>
+        span.context === 'code' && span.pmFrom <= selection.from && span.pmTo >= selection.to,
+    );
+    if (/[\r\n]/.test(text) && !code) {
+      this.host.reportError(
+        {
+          code: 'unsupported',
+          message: 'Многострочная visual-вставка пока требует исходный режим; текст сохранён ниже',
+          retryable: false,
+        },
+        text,
+      );
+      return;
+    }
+    this.replace(selection.from, selection.to, text);
   }
   private change(
     projection: Projection,

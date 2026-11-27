@@ -1,7 +1,7 @@
 # Markdown P6: решения, разрыв с прототипом и проверки
 
 Начало: 2026-11-26.
-Статус: **P6.1 завершён как спецификация; P6.2–P6.5 не реализованы, текущий пункт P6.2**.
+Статус: **P6.1 завершён; первый инкремент P6.2 подключён к файловому workspace, пункт P6.2 остаётся открытым; P6.3–P6.5 не реализованы**.
 Основания: [полная спецификация v1](../specifications/spec-markdown-v1.md), [контракт/P3](../specifications/spec-markdown-editing.md), [результаты P3](track-markdown-prototype.md), [файловый путь P5](track-desktop-ui.md), [план](plan-desktop-v1.md).
 
 ## 1. Результат P6.1
@@ -10,23 +10,23 @@
 - Зафиксированы правила inline-выделения/пустой каретки, split/join/Enter/Tab, минимальная область нормализации, reference-ссылки и image-диалог. Для каждого структурного действия требуется атомарная исходная транзакция и общий undo, не сериализация всего PM-document. Однозначный source fallback остаётся для неподдерживаемых/неоднозначных фрагментов, но не заменяет обычные обязательные функции GFM.
 - Search в visual использует прежнюю буквальную source-семантику с явной подписью. Скрытый match/замена переводят в source через flush. Mode/кеш/выделение принадлежат существующей SessionId; сохранение/закрытие/внешний конфликт используют тот же P5-путь. Асинхронные parse/preview и диалог проверяют ревизии/owner/поколение.
 - HTML никогда не исполняется, external images не загружаются. Внешние ссылки http/https открываются только явной командой с подтверждением и повторной проверкой в main; другие схемы не передаются ОС. Локальная документная ссылка требует фактического выбора в системном диалоге. Relative raster preview ограничен поддеревом owner, проверками пути/байтов/MIME/размеров и будущим AssetStore P6.3. CSP не ослабляется до кода этого шага.
-- [16 новых нормативных fixtures](../specifications/fixtures/spec-markdown-v1-cases.json) фиксируют 14 успешных source-преобразований и 2 отказа: Setext→ATX, backtick-run inline-code, remove-link/изменение одного reference-употребления, split paragraph/task, пустой nested-list/outdent, list conversion/indent, удлинение code fence, escaped pipe/table structure/alignment, quote, пересечение HTML и multiline paste в ячейку. Новые команды ещё не выполняются тестовым драйвером: `specified-not-executed` явно отделяет требования от результата. Прежние MD-01–MD-12 не изменялись.
+- [16 новых нормативных fixtures](../specifications/fixtures/spec-markdown-v1-cases.json) фиксируют 14 успешных source-преобразований и 2 отказа: Setext→ATX, backtick-run inline-code, remove-link/изменение одного reference-употребления, split paragraph/task, пустой nested-list/outdent, list conversion/indent, удлинение code fence, escaped pipe/table structure/alignment, quote, пересечение HTML и multiline paste в ячейку. На момент P6.1 команды не выполнялись тестовым драйвером (`specified-not-executed`); результат частичного исполнения P6.2 указан в разделе 6. Прежние MD-01–MD-12 не изменялись.
 - Для задержки P3 задан порядок P6.2: не привнести полный parse в source-path, кешировать по сессии/ревизии, локально обновлять visual при доказуемой области, измерить; при необходимости вынести полный parse в worker с ревизионным протоколом. Зафиксированы будущие бюджеты и изолированный packaged-benchmark с median/p95, а не обещание, что оптимизация уже выполнена.
 - Никакие runtime-код, preload/CSP, зависимости, миграции и старые fixtures на этом пункте не менялись. P6.1 — document-first подготовка, не перенос прототипа в файлы.
 
 ## 2. Что действительно есть в коде и что предстоит
 
-| Область | Фактическая основа P3/P5 | Остающаяся работа |
+| Область | Фактическая реализация после первого инкремента P6.2 | Остающаяся работа |
 | --- | --- | --- |
-| Source и сессии | [WorkspaceEditor](../../src/ui/editors/workspace-editor.ts): файловый source/flush/search/undo без полного Markdown-разбора | P6.2: mode по SessionId, общий host для source/visual, защита ABA/диалогов и обычные команды |
-| Parse/команды | [markdown.ts](../../src/formats/markdown/markdown.ts): parse, четыре вида действий; прототип не является полной панелью | P6.2: чистые planners всей таблицы v1, source-selection-after/scope, негативные границы и новые fixtures |
+| Source и сессии | [WorkspaceEditor](../../src/ui/editors/workspace-editor.ts): файловые source/visual, mode/ленивый parse-кеш по SessionId, общий flush/search/undo/save; source-ввод не запускает полный parse | P6.2: диалоги со stale/ABA-защитой, полный набор команд, кеш/восстановление прокрутки |
+| Parse/команды | [basic-formatting.ts](../../src/formats/markdown/basic-formatting.ts): heading/paragraph, strong/emphasis/strike и inline-code; выделение после правки и консервативные отказы | P6.2: остальные planners таблицы v1, mixed/частичные стили, sibling-блоки, пустые контейнеры и остальные fixtures |
 | Visual projection | [visual-projection.ts](../../src/ui/editors/visual-projection.ts): абзацы/heading/списки/таблицы/fenced code, консервативные opaque, placeholder images | P6.2: indented-code, alignment, точные карты/пустые контейнеры, structural split/join, безопасные links; P6.3: owner-bound raster preview |
-| Visual input | [visual-editor.ts](../../src/ui/editors/visual-editor.ts): текстовая замена в одном span, IME, checkbox, общая история | P6.2: действия между листьями/блоками и list/table/code, plain-text paste/drop, понятный отказ без потери payload |
+| Visual input | [visual-editor.ts](../../src/ui/editors/visual-editor.ts): текстовая замена в одном span, IME с сохранением soft LF, checkbox, общая история, plain-text paste/drop; multiline вне code сохраняется как pending | P6.2: действия между листьями/блоками, list/table/code, полная multiline-семантика |
 | Контроллер стенда | [prototype-controller.ts](../../src/ui/editors/prototype-controller.ts): memory-сессия, полный parse каждой новой ревизии в frame, даже source | Не переносить эту лишнюю работу в P5 source. P6.2: расширить существующий workspace, ленивый кеш/ревизионная проекция, изолированные замеры |
-| Навигация/ресурсы | Ссылки прототипа не навигируют, images — placeholders; main не экспортирует shell/asset API | P6.2: именованные DTO/политика открытия links, unit/native/GUI-security; P6.3/P6.4: запись/resolver/Save As с отдельной спецификацией до кода |
-| Файловая сохранность | P5 принят на Linux: source/save/reconcile, close/flush и наблюдение/конфликт | P6.2/P6.5: повторить на visual и форматировании, не создавать второй путь записи |
+| Навигация/ресурсы | Ссылки — инертные span без URL-атрибутов, images — placeholders; main не экспортирует shell/asset API | P6.2: диалоги/именованные DTO/политика открытия links, полная MG-06; P6.3/P6.4: запись/resolver/Save As с отдельной спецификацией до кода |
+| Файловая сохранность | P5-путь использован без второй записи: visual save/reopen с CRLF/BOM, две вкладки, dirty-конфликт/Save As и ожидание CDP-IME проверены GUI | P6.2/P6.5: полный набор Markdown/кодировок/сбоев, диалоги и MG-матрица |
 
-Таблица — результаты чтения кода, не обещание, что все возможности P3 уже работают с файлами.
+Таблица описывает частичную реализацию; она не означает завершения P6.2 или всей MG-матрицы.
 
 ## 3. Проверка решений и fixtures
 
@@ -51,4 +51,31 @@
 3. **P6.4:** до кода уточнить перенос относительных assets/reference-изображений при Save As, конфликты/отказ копирования и взаимодействие со снимком save. Это отдельный сценарий, не бесплатное следствие сменяемого хранилища.
 4. **P6.5:** сквозная MD-приёмка/все прежние регрессии, итог MG-01–MG-10/бюджетов, точные нетронутые фрагменты и байты после повторного открытия. Не считать P3-benchmark оптимизацией и не закрывать P6 с секундной задержкой ввода на 1 МиБ.
 
-Текущие ограничения остаются явными: Windows/macOS, системный IME/clipboard и интерактивные диалоги — P8; UI истории/авточерновиков/восстановления — P7. Визуальная файловая реализация, новые URL-проверки и AssetStore ещё не готовы. P6.1 завершает только требования/критерии, **31 из 45 задач плана**; отдельный коммит включает документацию и новые нормативные данные без push.
+Текущие ограничения остаются явными: Windows/macOS, системный IME/clipboard и интерактивные диалоги — P8; UI истории/авточерновиков/восстановления — P7. Полная visual-реализация, новые URL-проверки и AssetStore ещё не готовы. Завершена **31 из 45 задач плана**; первый инкремент не закрывает P6.2. Коммиты выполняются без push.
+
+## 5. Первый инкремент P6.2: контракт до кода
+
+P6.2 выполняется по внутренним инкрементам, без объявления пункта завершённым раньше всей матрицы. Первый инкремент подключает source/visual к существующему WorkspaceEditor: mode/ленивый parse-кеш на SessionId, общий flush/undo/save, исходные выделения и source-поиск из visual. TXT остаётся прежним и не получает parse. Базовая панель предоставляет heading/paragraph, strong/emphasis/strike и inline-code; новые чистые planners проверяют диапазоны/opaque/границы entities и не заменяют всю строку на предполагаемый expected.
+
+Смена режима сначала flush и проверка поколения активации, затем подготовка кадра, затем уничтожение старого движка. Ошибка/pending оставляет старый движок живым. RequestSource от защищённого узла меняет mode, а не только выделение. В поиске видимый однозначный match остаётся visual, скрытый match и любая replace-команда переходят в source до исходной транзакции. Разбор не выполняется от source-ввода/selection/metadata, только по запросу visual/format; холодный синхронный parse и полный повторный visual parse пока остаются известным ограничением, **не результатом оптимизации MG-10**.
+
+Проверки первого инкремента: unit mode/ABA/IME/pending/кеш/форматирование и GUI файловых MD с переключением/undo/save/reopen, двумя вкладками, поиском, конфликтом и безопасным opaque/remote-placeholder. Требования структурных list/table/code-действий, полноценные dialogs/link-IPC и изолированный benchmark не снимаются и остаются внутри P6.2. До их реализации UI явно обозначает промежуточный статус visual-интеграции.
+
+При проверке границ первого инкремента отдельно проверяются пустые ATX-заголовки и столкновения добавляемых inline-маркеров с исходными: неоднозначный диапазон отвергается до транзакции. Инертная DOM-метка ссылки содержит только числовую исходную позицию, не URL; обратный DOM-разбор восстанавливает тот же mark при IME. Это не активация ссылки и не новый файловый/сетевой IPC.
+
+## 6. Результат первого инкремента P6.2 — 2026-11-27
+
+- Файловые Markdown-вкладки используют исходный/визуальный движки на прежней сессии и общей истории. Режим/выделение/ленивый разбор изолированы по SessionId; metadata-only и повторный mode используют кеш, source-ввод не запускает полный Markdown parse. Mode/поиск не создают dirty или сохранённую версию; защищённый узел действительно открывает source. Ошибка mount возвращает source с исходником.
+- Добавлена базовая панель и Ctrl/Cmd+B/I: heading/paragraph, strong/emphasis/strike, inline-code. Пустой ATX меняет уровень без добавления видимого текста. Pure planner проверяет Unicode/CRLF, opaque/footnote, полные границы escapes/entities и парных маркеров. Повторное включение — no-op; неоднозначные delimiter-runs отвергаются после проверки реальным парсером, до применения транзакции. Это пока консервативный subset: mixed/частичное снятие, некоторые вложенные стили/соседние маркеры, sibling-блоки и пустые контейнеры остаются работой P6.2.
+- **MV-01/02 исполнены** через настоящий planner и core с точными expected/нетронутыми соседями в [unit-тесте](../../tests/unit/markdown-basic-formatting.test.ts). MV-03–MV-16 ещё не исполняются как нормативные команды; общий статус JSON изменён на `partially-executed-unit`, source/expected/action/области всех 16 примеров неизменны. Это не прохождение MV/MG целиком.
+- Visual paste/drop не принимает HTML как DOM: используется только plain text, файлы явно отклоняются до P6.3; неподдерживаемая multiline-вставка вне кода сохраняется доступным pending и блокирует переходы. URL не помещается в href/src/произвольный DOM-атрибут; ссылки пока не активируются, изображения не загружаются. GUI проверяет ноль remote-запросов и отсутствие исполняемых document-узлов. Исключаются только служебные `img.ProseMirror-separator` без src/srcset, создаваемые самой библиотекой.
+- Найден и исправлен IME-дефект: обратный DOM-разбор сворачивал soft LF в пробел, перестраивал абзац и мешал compositionend. Textblock/tableCell теперь сохраняют whitespace полностью; heading сохраняет уровень, инертный link-mark — свою числовую исходную позицию. Отдельный CDP-сценарий проверяет IME внутри ссылки с неизменными URL/title/CRLF, save и undo.
+- [Семь файловых GUI-сценариев](../../tests/electron/markdown-workspace.spec.mjs) проверяют format/undo/save/close/reopen с BOM/CRLF, изоляцию двух MD и TXT, видимый/скрытый source-find и replace-all, HTML/remote/paste/pending, ожидание IME при mode/save/close, clean reload/dirty conflict/Save As и IME ссылки. Полный набор также повторяет MD/ME-прототип и TXT/native/IPC-регрессии, но не заменяет будущие MG-критерии.
+
+Проверки итогового runtime: `npm run check` — **273 unit-теста в 20 файлах**, типы domain/main/renderer, lint/границы/форматирование; `npm run test:native` — **165 passed, 0 failed/skipped**, включая прежние SIGKILL. `TMPDIR=/tmp/opencode npm run dist:dir` прошёл на Linux x64, Electron 45.4.1 / ABI 150. Полные GUI — **по 64 passed dev/packaged**, тестовые бандлы в app.asar отсутствуют (`nativeTestsPresent: false`). Зависимости/lockfile, main/preload/CSP/миграции не менялись.
+
+Артефакты проверки: `/tmp/opencode/neweditor-p6-foundation-native.log`, `/tmp/opencode/neweditor-p6-foundation-full-dev.log`, `/tmp/opencode/neweditor-p6-foundation-full-packaged.log` и одноимённые GUI-каталоги без `.log`. Ранние неуспешные IME-прогоны не считаются приёмкой; отладочная instrumentation удалена.
+
+Проверка документации: 17 Markdown-файлов в `docs/`, 229 локальных ссылок по AST, закрытые кодовые блоки, 45 уникальных пунктов/31 завершённый и открытый P6.2. Все 16 нормативных cases и прежние MD-fixtures совпадают с P6.1; поменялся только общий status нового JSON. Повторный `npm run check` после обновления документов прошёл; `git diff --check` без ошибок.
+
+**P6.2 остаётся незавершённым, 31/45 задач.** Холодный/full visual parse синхронный; явная inline-команда дополнительно проверяет результат парсером. Source-path освобождён от полного разбора, но изолированные измерения MG-10 ещё не проводились и задержка P3 на 1 МиБ не объявляется устранённой. Следующий инкремент — структурные planners/PM-действия, затем диалоги/защищённая активация ссылок и оптимизация/измерения. P6.3/P6.4 — ресурсы/перенос; P7 — восстановление; Windows/macOS/реальный IME и clipboard остаются непроверенными.

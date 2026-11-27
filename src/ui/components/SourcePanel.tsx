@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { WorkspaceEditor } from '../editors/workspace-editor';
+import { MarkdownToolbar } from './MarkdownToolbar';
 
 export function SourcePanel({
   id,
@@ -27,6 +28,20 @@ export function SourcePanel({
       onKeyDownCapture={(event) => {
         const mod = (event.ctrlKey || event.metaKey) && !event.altKey;
         if (
+          state.markdown &&
+          mod &&
+          event.target instanceof Element &&
+          event.target.closest('.workspace-source-editor, .workspace-visual-editor') &&
+          (['b', 'i'].includes(event.key.toLowerCase()) || ['KeyB', 'KeyI'].includes(event.code))
+        ) {
+          event.preventDefault();
+          void editor.format(id, {
+            kind: 'toggle-inline',
+            style: event.key.toLowerCase() === 'b' || event.code === 'KeyB' ? 'strong' : 'emphasis',
+          });
+          return;
+        }
+        if (
           mod &&
           (['f', 'h'].includes(event.key.toLowerCase()) || ['KeyF', 'KeyH'].includes(event.code))
         ) {
@@ -42,6 +57,7 @@ export function SourcePanel({
         }
       }}
     >
+      {state.markdown && <MarkdownToolbar id={id} editor={editor} state={state} />}
       <div
         className="source-toolbar"
         onMouseDown={(event) => {
@@ -71,6 +87,11 @@ export function SourcePanel({
       <p className="source-warning">Исходный файл меняется только по команде «Сохранить».</p>
       {state.searchOpen && (
         <section className="source-search" aria-label="Поиск и замена">
+          {state.markdown && (
+            <p>
+              Поиск по Markdown-исходнику. Скрытое совпадение и замена открывают исходный режим.
+            </p>
+          )}
           <label>
             Найти
             <textarea
@@ -143,7 +164,10 @@ export function SourcePanel({
           )}
         </section>
       )}
-      <div className="workspace-source-editor" ref={element} />
+      <div
+        className={state.mode === 'visual' ? 'workspace-visual-editor' : 'workspace-source-editor'}
+        ref={element}
+      />
     </div>
   );
 }

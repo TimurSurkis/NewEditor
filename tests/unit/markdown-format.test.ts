@@ -15,6 +15,13 @@ const cases = JSON.parse(
   action: MarkdownAction & { select?: string };
 }[];
 describe('Markdown: чистые диапазоны и визуальная проекция', () => {
+  it('visual textblock сохраняет soft LF/пробелы при DOM/IME-разборе', () => {
+    const projection = visualProjection('## Title\n\nA\nB  C\n\n| A |\n| --- |\n| cell |\n');
+    expect(projection.doc.child(0).type.whitespace).toBe('pre');
+    expect(projection.doc.child(1).type.whitespace).toBe('pre');
+    expect(projection.doc.child(1).textContent).toBe('A\nB  C');
+    expect(projection.doc.child(2).child(1).child(0).type.whitespace).toBe('pre');
+  });
   it.each(cases)('$id: проекция валидна и ничего не сериализует', (example) => {
     const projection = visualProjection(example.source, 7);
     projection.doc.check();

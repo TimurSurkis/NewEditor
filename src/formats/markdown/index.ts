@@ -10,3 +10,4 @@ export type { ParsedMarkdown, MarkdownAction } from './markdown';
 export { mapText, sourceToText } from './source-map';
 export type { TextMap } from './source-map';
 export type { Nodes, Root } from 'mdast';
+export * from './basic-formatting';

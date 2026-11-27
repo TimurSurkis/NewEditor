@@ -166,7 +166,7 @@ export function Workspace({
               <div className="workspace-metadata">
                 {active.view.edit.document.format === 'txt' ? 'TXT' : 'Markdown'} ·{' '}
                 {active.view.edit.document.fileMetadata.encoding}
-                {active.view.edit.document.fileMetadata.bom ? ' · BOM' : ''} · Исходный режим
+                {active.view.edit.document.fileMetadata.bom ? ' · BOM' : ''}
                 <label>
                   Кодировка
                   <select

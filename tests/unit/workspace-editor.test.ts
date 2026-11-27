@@ -2,12 +2,12 @@ import { expect, it } from 'vitest';
 import { WorkspaceEditor } from '../../src/ui/editors/workspace-editor';
 import type { EditorFactory, EditorFrame, EditorHost } from '../../src/ui/editors/contracts';
 import type { CommandError } from '../../src/application';
-import type { Result } from '../../src/core';
+import type { DocumentFormat, Result } from '../../src/core';
 import { deferred, setup, transaction, value } from '../support/documents';
 
-function fixture() {
+function fixture(format: DocumentFormat = 'txt') {
   const memory = setup(),
-    id = memory.app.create('txt');
+    id = memory.app.create(format);
   let host!: EditorHost, frame!: EditorFrame;
   let flush = async (): Promise<Result<void, CommandError>> => ({ ok: true, value: undefined });
   let destroyed = 0;
@@ -28,7 +28,8 @@ function fixture() {
       };
     },
   };
-  const editor = new WorkspaceEditor(memory.app, factory);
+  const visual = { ...factory, mode: 'visual' as const };
+  const editor = new WorkspaceEditor(memory.app, factory, visual);
   editor.synchronize([id], id);
   editor.mount(id, {} as HTMLElement);
   const type = (text: string) => {
@@ -47,6 +48,7 @@ function fixture() {
     ...memory,
     id,
     editor,
+    visual,
     type,
     host: () => host,
     frame: () => frame,
@@ -70,6 +72,161 @@ it('общие undo/redo, выделение и история сохраняю�
   expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('A😀');
   await f.editor.selectAll(f.id);
   expect(f.editor.getSnapshot(f.id).selection).toEqual({ anchor: 0, head: 3 });
+  f.editor.destroy();
+});
+
+it('MD: mode/выделение/metadata-кеш не меняют исходник, общая история остаётся одной', async () => {
+  const f = fixture('markdown');
+  value(f.type('**A😀** e\u0301\r\n'));
+  f.host().selectionChanged({ anchor: 2, head: 5 });
+  const before = f.app.getSnapshot(f.id)!,
+    revision = before.edit.stateRevision;
+  expect(f.frame().markdown).toBeUndefined();
+  await f.editor.switchMode(f.id, 'visual');
+  const parsed = f.frame().markdown;
+  expect(parsed?.text).toBe(before.edit.document.text);
+  expect(f.frame().selection).toEqual({ anchor: 2, head: 5 });
+  await f.editor.switchMode(f.id, 'source');
+  await f.editor.switchMode(f.id, 'visual');
+  expect(f.frame().markdown).toBe(parsed);
+  expect(f.app.getSnapshot(f.id)?.edit.stateRevision).toBe(revision);
+  await f.editor.changeMetadata(f.id, { encoding: 'utf-8', bom: true });
+  expect(f.frame().markdown).toBe(parsed);
+  await f.editor.format(f.id, { kind: 'toggle-inline', style: 'strong' });
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('A😀 e\u0301\r\n');
+  await f.editor.switchMode(f.id, 'source');
+  await f.editor.history(f.id);
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('**A😀** e\u0301\r\n');
+  f.editor.destroy();
+});
+
+it('TXT не получает visual/Markdown-правки; source-кадры MD не содержат обязательного parse', async () => {
+  const f = fixture();
+  value(f.type('text'));
+  f.host().selectionChanged({ anchor: 0, head: 4 });
+  await f.editor.switchMode(f.id, 'visual');
+  await f.editor.format(f.id, { kind: 'heading', level: 2 });
+  expect(f.editor.getSnapshot(f.id).mode).toBe('source');
+  expect(f.frame().markdown).toBeUndefined();
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('text');
+  f.editor.destroy();
+  const md = fixture('markdown');
+  value(md.type('source'));
+  expect(md.frame().markdown).toBeUndefined();
+  await md.editor.switchMode(md.id, 'visual');
+  const parsed = md.frame().markdown;
+  await md.editor.switchMode(md.id, 'source');
+  value(md.type('new'));
+  expect(md.frame().markdown).toBeUndefined();
+  await md.editor.switchMode(md.id, 'visual');
+  expect(md.frame().markdown).not.toBe(parsed);
+  md.editor.destroy();
+});
+
+it('mode ожидает IME/flush до уничтожения прежнего движка', async () => {
+  const f = fixture('markdown'),
+    pending = deferred<Result<void, CommandError>>();
+  f.host().compositionChanged(true);
+  f.flush(() => pending.promise);
+  const switching = f.editor.switchMode(f.id, 'visual');
+  expect(f.destroyed()).toBe(0);
+  expect(f.editor.getSnapshot(f.id).mode).toBe('source');
+  value(f.type('日本語'));
+  f.host().compositionChanged(false);
+  pending.resolve({ ok: true, value: undefined });
+  await switching;
+  expect(f.editor.getSnapshot(f.id).mode).toBe('visual');
+  expect(f.frame().markdown?.text).toBe('日本語');
+  f.editor.destroy();
+});
+
+it('pending/ABA не разрешают смену движка и не теряют новый текст', async () => {
+  const f = fixture('markdown');
+  value(f.type('new'));
+  f.host().reportError({ code: 'busy', message: 'pending', retryable: true }, 'pending');
+  await f.editor.switchMode(f.id, 'visual');
+  expect(f.destroyed()).toBe(0);
+  expect(f.editor.getSnapshot(f.id).pending).toBe('pending');
+  f.editor.discardPending(f.id);
+  const pending = deferred<Result<void, CommandError>>(),
+    second = f.app.create('markdown');
+  f.flush(() => pending.promise);
+  const switching = f.editor.switchMode(f.id, 'visual');
+  f.editor.synchronize([f.id, second], second);
+  f.editor.synchronize([f.id, second], f.id);
+  pending.resolve({ ok: true, value: undefined });
+  await switching;
+  expect(f.editor.getSnapshot(f.id).mode).toBe('source');
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('new');
+  f.editor.destroy();
+});
+
+it('visual-find сохраняет видимый match; скрытый match и replace переходят в source', async () => {
+  const f = fixture('markdown'),
+    text = '**word** [label](https://example.test/)';
+  value(f.type(text));
+  await f.editor.switchMode(f.id, 'visual');
+  f.editor.setSearch(f.id, { query: 'word', replacement: '$1' });
+  await f.editor.find(f.id);
+  expect(f.editor.getSnapshot(f.id).mode).toBe('visual');
+  f.editor.setSearch(f.id, { query: 'https' });
+  await f.editor.find(f.id);
+  expect(f.editor.getSnapshot(f.id).mode).toBe('source');
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe(text);
+  await f.editor.switchMode(f.id, 'visual');
+  f.editor.setSearch(f.id, { query: 'word' });
+  await f.editor.replace(f.id, true);
+  expect(f.editor.getSnapshot(f.id).mode).toBe('source');
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('**$1** [label](https://example.test/)');
+  await f.editor.history(f.id);
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe(text);
+  f.editor.destroy();
+});
+
+it('requestSource меняет режим; ошибка visual-mount возвращает сохранённый source', async () => {
+  const f = fixture('markdown');
+  value(f.type('<div>raw</div>'));
+  await f.editor.switchMode(f.id, 'visual');
+  const done = deferred<void>(),
+    stop = f.editor.subscribe(f.id, () => {
+      if (f.editor.getSnapshot(f.id).mode === 'source') done.resolve();
+    });
+  f.host().requestSource({ anchor: 5, head: 8 });
+  await done.promise;
+  stop();
+  expect(f.frame().selection).toEqual({ anchor: 5, head: 8 });
+  f.visual.mount = () => {
+    throw new Error('projection failed');
+  };
+  await f.editor.switchMode(f.id, 'visual');
+  expect(f.editor.getSnapshot(f.id).mode).toBe('source');
+  expect(f.editor.getSnapshot(f.id).error).toContain('исходник сохранён');
+  expect(f.frame().state.document.text).toBe('<div>raw</div>');
+  f.editor.destroy();
+});
+
+it('mode/parse-кеши двух MD изолированы, финальное closing блокирует visual-команды', async () => {
+  const f = fixture('markdown');
+  value(f.type('first'));
+  await f.editor.switchMode(f.id, 'visual');
+  const first = f.frame().markdown;
+  const second = f.app.create('markdown');
+  f.editor.detach(f.id);
+  f.editor.synchronize([f.id, second], second);
+  f.editor.mount(second, {} as HTMLElement);
+  const state = f.app.getSnapshot(second)!.edit;
+  value(f.host().dispatch(transaction(state, { changes: [{ from: 0, to: 0, insert: 'second' }] })));
+  await f.editor.switchMode(second, 'visual');
+  expect(f.frame().markdown).not.toBe(first);
+  expect(f.editor.getSnapshot(f.id).mode).toBe('visual');
+  f.editor.detach(second);
+  f.editor.synchronize([f.id, second], f.id);
+  f.editor.mount(f.id, {} as HTMLElement);
+  expect(f.frame().markdown).toBe(first);
+  f.editor.synchronize([f.id, second], f.id, [f.id]);
+  expect(f.frame().editable).toBe(false);
+  await f.editor.format(f.id, { kind: 'heading', level: 2 });
+  expect(f.app.getSnapshot(f.id)?.edit.document.text).toBe('first');
   f.editor.destroy();
 });
 

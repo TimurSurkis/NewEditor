@@ -121,3 +121,21 @@
   padding: 0.75rem;
   border: 1px solid #ccd2dc;
 }
+.workspace-visual-editor {
+  background: white;
+  border: 1px solid #cbd2dc;
+  border-radius: 4px;
+}
+.workspace-visual-editor .ProseMirror {
+  min-height: 280px;
+  max-height: 55vh;
+  overflow: auto;
+  padding: 16px;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ProseMirror [data-markdown-link] {
+  color: #285db2;
+  text-decoration: underline;
+}

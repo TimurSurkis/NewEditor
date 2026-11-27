@@ -19,7 +19,8 @@ const block = (tag: string): NodeSpec => ({
 const textblock = (tag: string): NodeSpec => ({
   group: 'block',
   content: 'inline*',
-  parseDOM: [{ tag }],
+  whitespace: 'pre',
+  parseDOM: [{ tag, preserveWhitespace: 'full' }],
   toDOM: () => [tag, 0],
 });
 export const visualSchema = new Schema({
@@ -30,6 +31,11 @@ export const visualSchema = new Schema({
     heading: {
       ...textblock('h1'),
       attrs: { level: { default: 1 } },
+      parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+        tag: `h${level}`,
+        attrs: { level },
+        preserveWhitespace: 'full' as const,
+      })),
       toDOM: (node) => [`h${node.attrs['level']}`, 0],
     },
     blockquote: block('blockquote'),
@@ -73,7 +79,11 @@ export const visualSchema = new Schema({
     table_row: { content: 'table_cell+', parseDOM: [{ tag: 'tr' }], toDOM: () => ['tr', 0] },
     table_cell: {
       content: 'inline*',
-      parseDOM: [{ tag: 'td' }, { tag: 'th', attrs: { header: true } }],
+      whitespace: 'pre',
+      parseDOM: [
+        { tag: 'td', preserveWhitespace: 'full' },
+        { tag: 'th', attrs: { header: true }, preserveWhitespace: 'full' },
+      ],
       attrs: { header: { default: false } },
       toDOM: (node) => [node.attrs['header'] ? 'th' : 'td', 0],
     },
@@ -137,9 +147,21 @@ export const visualSchema = new Schema({
     strike: { parseDOM: [{ tag: 's' }], toDOM: () => ['s', 0] },
     code: { code: true, parseDOM: [{ tag: 'code' }], toDOM: () => ['code', 0] },
     link: {
-      attrs: { url: { default: '' } },
-      parseDOM: [{ tag: 'a' }],
-      toDOM: (mark) => ['a', { href: '#', title: mark.attrs['url'] }, 0],
+      attrs: { from: { default: 0 } },
+      parseDOM: [
+        {
+          tag: 'span[data-markdown-link]',
+          getAttrs: (element) => {
+            const from = Number(element.getAttribute('data-markdown-link'));
+            return Number.isSafeInteger(from) && from >= 0 ? { from } : false;
+          },
+        },
+      ],
+      toDOM: (mark) => [
+        'span',
+        { 'data-markdown-link': mark.attrs['from'], title: 'Ссылка: открытие пока не подключено' },
+        0,
+      ],
     },
   },
 });
@@ -165,11 +187,6 @@ export function visualProjection(text: string, revision = 0, cached?: ParsedMark
         ? cached
         : parseMarkdown(text, revision),
     spans: Span[] = [];
-  const definitions = new Map(
-    descendants(parsed.tree)
-      .filter((node) => node.type === 'definition')
-      .map((node) => [node.identifier.toLowerCase(), node.url]),
-  );
   const make = (
     name: string,
     attrs: Record<string, unknown> | null = null,
@@ -268,15 +285,9 @@ export function visualProjection(text: string, revision = 0, cached?: ParsedMark
       ) {
         const mark =
           node.type === 'delete' ? 'strike' : node.type.startsWith('link') ? 'link' : node.type;
-        const url =
-          node.type === 'link'
-            ? node.url
-            : node.type === 'linkReference'
-              ? (definitions.get(node.identifier.toLowerCase()) ?? '')
-              : '';
         created = inline(node.children, position, [
           ...marks,
-          visualSchema.marks[mark]!.create(mark === 'link' ? { url } : null),
+          visualSchema.marks[mark]!.create(mark === 'link' ? { from: range.from } : null),
         ]);
       } else created = [opaque(node, position, true)];
       result.push(...created);

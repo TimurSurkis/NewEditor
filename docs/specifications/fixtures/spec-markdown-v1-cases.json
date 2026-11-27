@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "specified-not-executed",
+  "status": "partially-executed-unit",
   "cases": [
     {
       "id": "MV-01",

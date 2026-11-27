@@ -252,9 +252,9 @@ test('P6.2 increment: HTML/remote images не исполняются, paste то
     ).toHaveCount(0);
     await paste(null, '<script>globalThis.mdExecuted=true</script>');
     await expect(f.page.getByRole('alert')).toContainText('HTML не вставляется');
-    await paste('line1\nline2', '<b>ignored</b>');
+    await paste('line1\n\n', '<b>ignored</b>');
     await expect(f.page.getByLabel('Неподтверждённый ввод', { exact: true })).toHaveValue(
-      'line1\nline2',
+      'line1\n\n',
     );
     await expect(
       f.page.getByRole('button', { name: 'Исходный режим', exact: true }),
@@ -390,6 +390,170 @@ test('P6.2 increment: IME внутри inert-ссылки сохраняет mar
     expect(await readFile(f.path, 'utf8')).toBe(source.replace('слово', 'сл中о'));
     await f.page.getByRole('button', { name: 'Отменить', exact: true }).click();
     await expect(link).toHaveText('слово');
+  } finally {
+    await f.cleanup();
+  }
+});
+
+async function visualSelection(f, needle, edge) {
+  await f.search(needle);
+  await f.page.getByRole('button', { name: 'Следующее', exact: true }).click();
+  await f.page.getByRole('button', { name: 'Поиск и замена', exact: true }).click();
+  const editor = f.page.locator('.workspace-visual-editor .ProseMirror');
+  await editor.focus();
+  if (edge) await editor.press(edge === 'start' ? 'ArrowLeft' : 'ArrowRight');
+  return editor;
+}
+async function plainPaste(page, text) {
+  await page.evaluate((text) => {
+    const data = new window.DataTransfer();
+    data.setData('text/plain', text);
+    document.querySelector('.workspace-visual-editor .ProseMirror').dispatchEvent(
+      new window.ClipboardEvent('paste', {
+        clipboardData: data,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, text);
+}
+
+test('P6.2 structure: Enter внутри inline-стиля, общая undo/redo и точные CRLF после save/reopen', async () => {
+  const source = '# Title\r\n\r\n**alphabeta**\r\n\r\nTail.\r\n',
+    f = await fixture(source, true);
+  try {
+    await f.mode(true);
+    const editor = await visualSelection(f, 'beta', 'start');
+    await editor.press('Enter');
+    await expect(f.page.locator('.workspace-visual-editor p strong')).toHaveText(['alpha', 'beta']);
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText([
+      'alpha',
+      'beta',
+      'Tail.',
+    ]);
+    await f.mode(false);
+    await f.page.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await expect(f.page.locator('.workspace-source-editor .cm-line')).toHaveText(
+      source.split('\r\n'),
+    );
+    await f.mode(true);
+    await f.page.getByRole('button', { name: 'Повторить', exact: true }).click();
+    await expect(f.page.locator('.workspace-visual-editor p strong')).toHaveText(['alpha', 'beta']);
+    await f.page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+    await expect(f.page.getByTestId('save-state')).toHaveText('Сохранено');
+    const expected = source.replace('**alphabeta**', '**alpha**\r\n\r\n**beta**');
+    expect(await readFile(f.path)).toEqual(
+      Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(expected)]),
+    );
+    await f.page.getByRole('button', { name: 'Закрыть Заметки.md', exact: true }).click();
+    await f.page.getByRole('button', { name: 'Открыть…', exact: true }).click();
+    await expect(f.page.locator('.workspace-source-editor .cm-line')).toHaveText(
+      expected.split('\r\n'),
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test('P6.2 structure: split/join Backspace/Delete, hard break и безопасный multiline paste', async () => {
+  const source = 'alphabeta\n\nTail.\n',
+    f = await fixture(source);
+  try {
+    await f.mode(true);
+    let editor = await visualSelection(f, 'beta', 'start');
+    await editor.press('Enter');
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText([
+      'alpha',
+      'beta',
+      'Tail.',
+    ]);
+    await editor.press('Backspace');
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText(['alphabeta', 'Tail.']);
+    editor = await visualSelection(f, 'beta', 'start');
+    await editor.press('Enter');
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText([
+      'alpha',
+      'beta',
+      'Tail.',
+    ]);
+    editor = await visualSelection(f, 'alpha', 'end');
+    await editor.press('Delete');
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText(['alphabeta', 'Tail.']);
+    editor = await visualSelection(f, 'beta', 'start');
+    await editor.press('Shift+Enter');
+    await expect(
+      f.page
+        .locator('.workspace-visual-editor p')
+        .first()
+        .locator('br:not(.ProseMirror-trailingBreak)'),
+    ).toHaveCount(1);
+    await f.page.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await visualSelection(f, 'alphabeta');
+    await plainPaste(f.page, 'one\n* two\n\n<script>three</script>');
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText([
+      'one* two',
+      '<script>three</script>',
+      'Tail.',
+    ]);
+    await expect(
+      f.page.locator(
+        '.workspace-visual-editor script, .workspace-visual-editor ul, .workspace-visual-editor [data-opaque]',
+      ),
+    ).toHaveCount(0);
+    await f.page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+    await expect(f.page.getByTestId('save-state')).toHaveText('Сохранено');
+    expect(await readFile(f.path, 'utf8')).toBe(
+      'one  \n\\* two\n\n\\<script\\>three\\<\\/script\\>\n\nTail.\n',
+    );
+    await f.page.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText(['alphabeta', 'Tail.']);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test('P6.2 structure: отказ multiline в таблице сохраняет payload даже после нового ввода/клавиш', async () => {
+  const source = '| A |\n| --- |\n| cell |\n\nTail.\n',
+    f = await fixture(source);
+  try {
+    await f.mode(true);
+    const editor = await visualSelection(f, 'cell');
+    await plainPaste(f.page, 'line1\r\nline2');
+    await expect(f.page.getByLabel('Неподтверждённый ввод', { exact: true })).toHaveValue(
+      'line1\nline2',
+    );
+    await editor.press('Enter');
+    await editor.press('Backspace');
+    await f.page.keyboard.insertText('Z');
+    const cdp = await f.app.context().newCDPSession(f.page);
+    await cdp.send('Input.imeSetComposition', { text: '新', selectionStart: 1, selectionEnd: 1 });
+    await cdp.send('Input.insertText', { text: '新' });
+    await plainPaste(f.page, 'replacement');
+    await expect(f.page.getByLabel('Неподтверждённый ввод', { exact: true })).toHaveValue(
+      'line1\nline2',
+    );
+    await expect(f.page.locator('.workspace-visual-editor td')).toHaveText('cell');
+    await expect(
+      f.page.getByRole('button', { name: 'Исходный режим', exact: true }),
+    ).toBeDisabled();
+    await f.page
+      .getByRole('button', { name: 'Отбросить неподтверждённый ввод', exact: true })
+      .click();
+    await expect(f.page.locator('.workspace-visual-editor td')).toHaveText('cell');
+    await visualSelection(f, 'Tail.');
+    await plainPaste(f.page, 'a\n\n\nb');
+    await expect(f.page.getByLabel('Неподтверждённый ввод', { exact: true })).toHaveValue(
+      'a\n\n\nb',
+    );
+    await expect(f.page.locator('.workspace-visual-editor p')).toHaveText('Tail.');
+    await f.page
+      .getByRole('button', { name: 'Отбросить неподтверждённый ввод', exact: true })
+      .click();
+    await f.mode(false);
+    await expect(f.page.locator('.workspace-source-editor .cm-line')).toHaveText(
+      source.split('\n'),
+    );
+    expect(await readFile(f.path, 'utf8')).toBe(source);
   } finally {
     await f.cleanup();
   }

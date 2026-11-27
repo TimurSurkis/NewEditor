@@ -11,3 +11,4 @@ export { mapText, sourceToText } from './source-map';
 export type { TextMap } from './source-map';
 export type { Nodes, Root } from 'mdast';
 export * from './basic-formatting';
+export * from './paragraph-editing';

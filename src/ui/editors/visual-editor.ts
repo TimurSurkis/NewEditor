@@ -1,7 +1,8 @@
 import { EditorState, TextSelection, NodeSelection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
-import { markdownAction, visualInsert } from '../../formats';
+import { markdownAction, planParagraphEdit, visualInsert } from '../../formats';
+import type { ParagraphAction } from '../../formats';
 import type { CommandError } from '../../application';
 import type { Result, TextChange } from '../../core';
 import type { EditorFactory, EditorFrame, EditorHost, EditorInstance } from './contracts';
@@ -48,8 +49,9 @@ class VisualEditor implements EditorInstance {
         return true;
       },
       handleTextInput: (_view, from, to, text) => {
-        if (this.composition.active || this.composition.error) return false;
-        this.replace(from, to, text);
+        if (this.composition.error) return true;
+        if (this.composition.active) return false;
+        this.insertText(from, to, text);
         return true;
       },
       handleKeyDown: (_view, event) => {
@@ -68,8 +70,38 @@ class VisualEditor implements EditorInstance {
           }
           return true;
         }
-        if (event.key === 'Enter' && !this.composition.active) {
-          this.replace(this.view.state.selection.from, this.view.state.selection.to, '\n');
+        if (this.composition.error && ['Enter', 'Backspace', 'Delete', 'Tab'].includes(event.key))
+          return true;
+        if (
+          event.key === 'Enter' &&
+          !this.composition.active &&
+          !event.isComposing &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey
+        ) {
+          const selection = this.view.state.selection;
+          if (this.codeSelection(selection.from, selection.to))
+            this.replace(selection.from, selection.to, '\n');
+          else this.paragraph({ kind: event.shiftKey ? 'hard-break' : 'split-block' }, '\n');
+          return true;
+        }
+        const selection = this.view.state.selection;
+        if (
+          !this.composition.active &&
+          !event.isComposing &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          selection.empty &&
+          ((event.key === 'Backspace' && selection.$from.parentOffset === 0) ||
+            (event.key === 'Delete' &&
+              selection.$from.parentOffset === selection.$from.parent.content.size))
+        ) {
+          this.paragraph(
+            { kind: event.key === 'Backspace' ? 'join-backward' : 'join-forward' },
+            null,
+          );
           return true;
         }
         return false;
@@ -108,6 +140,27 @@ class VisualEditor implements EditorInstance {
           return true;
         },
         beforeinput: (_view, event) => {
+          if (this.composition.error) {
+            event.preventDefault();
+            return true;
+          }
+          if (
+            event instanceof InputEvent &&
+            !event.isComposing &&
+            !this.composition.active &&
+            ['insertParagraph', 'insertLineBreak'].includes(event.inputType)
+          ) {
+            event.preventDefault();
+            const selection = this.view.state.selection;
+            if (this.codeSelection(selection.from, selection.to))
+              this.replace(selection.from, selection.to, '\n');
+            else
+              this.paragraph(
+                { kind: event.inputType === 'insertParagraph' ? 'split-block' : 'hard-break' },
+                '\n',
+              );
+            return true;
+          }
           if (
             event instanceof InputEvent &&
             event.inputType === 'insertText' &&
@@ -117,21 +170,30 @@ class VisualEditor implements EditorInstance {
             !this.composition.error
           ) {
             event.preventDefault();
-            this.replace(this.view.state.selection.from, this.view.state.selection.to, event.data);
+            this.insertText(
+              this.view.state.selection.from,
+              this.view.state.selection.to,
+              event.data,
+            );
             return true;
           }
           return false;
         },
-        compositionstart: () => {
+        compositionstart: (_view, event) => {
           if (this.endPending) {
             cancelAnimationFrame(this.animation);
             this.commitComposition();
+          }
+          if (this.composition.error) {
+            event.preventDefault();
+            return true;
           }
           this.composition.begin(this.frame);
           this.compositionProjection ??= this.projection;
           return false;
         },
         compositionend: () => {
+          if (this.composition.error) return true;
           this.endPending = true;
           this.animation = requestAnimationFrame(() => {
             this.animation = requestAnimationFrame(() => this.commitComposition());
@@ -165,10 +227,12 @@ class VisualEditor implements EditorInstance {
         },
       },
       dispatchTransaction: (transaction) => {
-        if (this.composition.active || this.composition.error) {
+        if (this.composition.error) {
+          if (!transaction.docChanged) this.view.updateState(this.view.state.apply(transaction));
+          return;
+        }
+        if (this.composition.active) {
           this.view.updateState(this.view.state.apply(transaction));
-          if (this.composition.error && transaction.docChanged)
-            host.reportError(this.composition.error, transaction.doc.textContent);
           return;
         }
         if (transaction.docChanged) {
@@ -231,22 +295,40 @@ class VisualEditor implements EditorInstance {
     const text = data.getData('text/plain');
     if (!text) return;
     const selection = this.view.state.selection;
-    const code = this.projection.spans.some(
-      (span) =>
-        span.context === 'code' && span.pmFrom <= selection.from && span.pmTo >= selection.to,
+    this.insertText(selection.from, selection.to, text);
+  }
+  private codeSelection(from: number, to: number): boolean {
+    return this.projection.spans.some(
+      (span) => span.context === 'code' && span.pmFrom <= from && span.pmTo >= to,
     );
-    if (/[\r\n]/.test(text) && !code) {
-      this.host.reportError(
-        {
-          code: 'unsupported',
-          message: 'Многострочная visual-вставка пока требует исходный режим; текст сохранён ниже',
-          retryable: false,
-        },
-        text,
-      );
-      return;
+  }
+  private insertText(from: number, to: number, text: string): void {
+    if (/[\r\n]/.test(text) && !this.codeSelection(from, to))
+      this.paragraph({ kind: 'insert-text', text }, text, from, to);
+    else this.replace(from, to, text);
+  }
+  private paragraph(
+    action: ParagraphAction,
+    pending: string | null,
+    from = this.view.state.selection.from,
+    to = this.view.state.selection.to,
+  ): void {
+    if (!this.frame.editable || this.composition.active || this.composition.error) return;
+    const selection = boundedSelection(this.frame.state.document.text, {
+      anchor: toSource(this.projection, from, 1),
+      head: toSource(this.projection, to, from === to ? 1 : -1),
+    });
+    const plan = planParagraphEdit(this.projection.parsed, selection, action);
+    const tx = plan.ok
+      ? edit(this.frame, plan.value.body.changes, plan.value.selection, null)
+      : { ok: false as const, error: { ...plan.error, retryable: false } };
+    const result = tx.ok ? this.host.dispatch(tx.value) : tx;
+    if (result.ok) this.render(result.value);
+    else {
+      const error: CommandError = result.error;
+      if (pending !== null) this.composition.error = error;
+      this.host.reportError(error, pending);
     }
-    this.replace(selection.from, selection.to, text);
   }
   private change(
     projection: Projection,
